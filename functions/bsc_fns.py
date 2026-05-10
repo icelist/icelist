@@ -17,8 +17,23 @@ class _BaseBscFn(Strategy):
     chain = "bsc"
 
     async def run(self, dry_run: bool = True) -> None:
-        await self.client.connect()
-        self.log(f"started on BSC, dry_run={dry_run}", "INFO")
+        self.log(f"🔌 connecting to BSC RPC...", "INFO")
+        try:
+            await self.client.connect()
+        except Exception as e:
+            self.log(f"❌ RPC connect failed: {e}", "ERROR")
+            self.log(f"💡 请检查 API 设置页的 BSC_RPC_URL 是否正确", "WARNING")
+            raise
+        self.log(f"✓ BSC RPC connected, dry_run={dry_run}", "SUCCESS")
+
+        async def heartbeat():
+            i = 0
+            while True:
+                await asyncio.sleep(30)
+                i += 1
+                self.log(f"💓 running ({i*30}s)", "INFO")
+        hb = asyncio.create_task(heartbeat())
+
         try:
             await self._main_loop(dry_run)
         except asyncio.CancelledError:
@@ -29,6 +44,7 @@ class _BaseBscFn(Strategy):
             self.log(f"crashed: {e}", "ERROR")
             raise
         finally:
+            hb.cancel()
             await self.client.close()
 
     async def _main_loop(self, dry_run: bool) -> None:

@@ -17,7 +17,7 @@ block_cipher = None
 PROJECT_MODULES = [
     # core
     'core', 'core.base', 'core.config', 'core.logger', 'core.notifier',
-    'core.vault', 'core.safety',
+    'core.vault', 'core.safety', 'core.launchpads',
     # chains
     'chains', 'chains.solana', 'chains.solana.client',
     'chains.evm', 'chains.evm.client',
@@ -27,6 +27,7 @@ PROJECT_MODULES = [
     'gui', 'gui.main_window', 'gui.theme', 'gui.log_bridge', 'gui.runner',
     'gui.pages', 'gui.pages.dashboard_page', 'gui.pages.functions_page',
     'gui.pages.wallets_page', 'gui.pages.api_page', 'gui.pages.logs_page',
+    'gui.pages.upcoming_page',
     'gui.widgets', 'gui.widgets.cards',
     # ui（CLI 模式）
     'ui', 'ui.banner', 'ui.dashboard', 'ui.menu', 'ui.theme',

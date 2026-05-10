@@ -16,6 +16,7 @@ from .pages.functions_page import FunctionsPage
 from .pages.wallets_page import WalletsPage
 from .pages.api_page import ApiPage
 from .pages.logs_page import LogsPage
+from .pages.upcoming_page import UpcomingPage
 from .log_bridge import LogBridge
 from .runner import StrategyRunner
 
@@ -26,6 +27,7 @@ from core.logger import logger
 
 NAV_ITEMS = [
     ("dashboard",  "◉  仪表盘",   "实时监控"),
+    ("upcoming",   "🚀  打新活动", "即将上线"),
     ("functions",  "⚡  功能",     "启停策略"),
     ("wallets",    "🔑  钱包",     "私钥管理"),
     ("api",        "📡  API 设置", "RPC / 通知"),
@@ -114,20 +116,22 @@ class MainWindow(QMainWindow):
         # ---------- Main content ----------
         self.stack = QStackedWidget()
         self.dashboard_page = DashboardPage()
+        self.upcoming_page = UpcomingPage(self.runner)
         self.functions_page = FunctionsPage()
         self.wallets_page = WalletsPage(self.vault)
         self.api_page = ApiPage(self.vault)
         self.logs_page = LogsPage()
 
         self.stack.addWidget(self.dashboard_page)
+        self.stack.addWidget(self.upcoming_page)
         self.stack.addWidget(self.functions_page)
         self.stack.addWidget(self.wallets_page)
         self.stack.addWidget(self.api_page)
         self.stack.addWidget(self.logs_page)
 
         self._page_index = {
-            "dashboard": 0, "functions": 1,
-            "wallets": 2, "api": 3, "logs": 4,
+            "dashboard": 0, "upcoming": 1, "functions": 2,
+            "wallets": 3, "api": 4, "logs": 5,
         }
 
         root.addWidget(self.stack, 1)
@@ -180,12 +184,25 @@ class MainWindow(QMainWindow):
     def _on_fn_toggle(self, fn_code: str, should_run: bool) -> None:
         if should_run:
             # 启动前确认钱包/配置
-            if not self.vault.is_locked() and not self._warm_check(fn_code):
-                # 用户可以继续（仅提示），dry_run 默认打开
-                pass
+            if not self.vault.is_locked():
+                self._warm_check(fn_code)
             self.runner.start_fn(fn_code, dry_run=True)
+            # 立即给用户反馈：写入日志 + 切到日志页
+            self.logs_page.append_log("INFO", f"▶ 启动 {fn_code}... 连接 RPC 中")
+            self.dashboard_page.push_signal(
+                datetime.now().strftime("%H:%M:%S"),
+                fn_code, "START", 0, "正在启动策略"
+            )
+            # 弹出轻量气泡提示
+            QMessageBox.information(
+                self, "已启动",
+                f"✓ {fn_code} 已启动。\n\n"
+                f"正在后台连接 RPC + 监听链上事件。\n"
+                f"请切换到【📜 日志】页面查看实时状态。",
+            )
         else:
             self.runner.stop_fn(fn_code)
+            self.logs_page.append_log("WARNING", f"■ 停止 {fn_code}")
 
     def _warm_check(self, fn_code: str) -> bool:
         """启动前检查：是否有对应链的钱包、RPC 是否设置"""
@@ -206,6 +223,7 @@ class MainWindow(QMainWindow):
         running = self.runner.running_set()
         self.dashboard_page.update_running_count(running)
         self.stop_all_btn.setEnabled(len(running) > 0)
+        self.logs_page.append_log("SUCCESS", f"✓ {fn_code} 已启动，正在监听链上事件")
 
     def _on_fn_stopped(self, fn_code: str) -> None:
         self.functions_page.set_running(fn_code, False)
