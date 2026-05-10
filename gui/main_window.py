@@ -1,5 +1,5 @@
 """
-主窗口：左侧导航 + 右侧堆叠页面
+主窗口：左侧导航 + 右侧堆叠页面 + 全局热键
 """
 from __future__ import annotations
 from datetime import datetime
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from .theme import QSS, COLORS
 from .pages.dashboard_page import DashboardPage
+from .pages.trenches_page import TrenchesPage
 from .pages.functions_page import FunctionsPage
 from .pages.wallets_page import WalletsPage
 from .pages.api_page import ApiPage
@@ -19,6 +20,7 @@ from .pages.logs_page import LogsPage
 from .pages.upcoming_page import UpcomingPage
 from .log_bridge import LogBridge
 from .runner import StrategyRunner
+from .hotkeys import HotkeyManager
 
 from core.config import load_config, reload_from_vault
 from core.vault import Vault
@@ -26,21 +28,22 @@ from core.logger import logger
 
 
 NAV_ITEMS = [
-    ("dashboard",  "◉  仪表盘",   "实时监控"),
-    ("upcoming",   "🚀  打新活动", "即将上线"),
-    ("functions",  "⚡  功能",     "启停策略"),
-    ("wallets",    "🔑  钱包",     "私钥管理"),
-    ("api",        "📡  API 设置", "RPC / 通知"),
-    ("logs",       "📜  日志",     "实时日志流"),
+    ("dashboard",  "◉   仪表盘",      "Dashboard"),
+    ("trenches",   "🎯  Trenches",   "实时发现"),
+    ("upcoming",   "🚀  打新活动",    "Launchpads"),
+    ("functions",  "⚡  策略",        "Strategies"),
+    ("wallets",    "🔑  钱包",        "Wallets"),
+    ("api",        "📡  API",         "RPC / 通知"),
+    ("logs",       "📜  日志",        "Live Logs"),
 ]
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Chain Sniper · Multi-Chain Alpha Framework")
-        self.resize(1280, 820)
-        self.setMinimumSize(1080, 700)
+        self.setWindowTitle("Chain Sniper · Multi-Chain Trading Terminal")
+        self.resize(1440, 900)
+        self.setMinimumSize(1200, 760)
 
         # 核心依赖
         self.vault = Vault()
@@ -48,11 +51,13 @@ class MainWindow(QMainWindow):
         self.runner = StrategyRunner(self.cfg)
         self.runner.start_loop()
 
-        # 持仓缓存（key: "fn_code:token"）
+        # 持仓缓存
         self._positions: dict[str, dict] = {}
+        self._latest_mint = None  # 最新信号的 mint，供热键使用
 
         self._build_ui()
         self._wire()
+        self._setup_hotkeys()
 
         # 日志桥
         self.log_bridge = LogBridge()
@@ -60,7 +65,6 @@ class MainWindow(QMainWindow):
 
         logger.info("Chain Sniper GUI started")
 
-        # 提示用户解锁（如果已初始化）
         if self.vault.is_initialized() and self.vault.is_locked():
             self._prompt_unlock_at_startup()
 
@@ -75,14 +79,14 @@ class MainWindow(QMainWindow):
         # ---------- Sidebar ----------
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(200)
         sb_lay = QVBoxLayout(sidebar)
         sb_lay.setContentsMargins(0, 0, 0, 16)
         sb_lay.setSpacing(0)
 
         logo = QLabel("⚡ CHAIN SNIPER")
         logo.setObjectName("logo")
-        sub = QLabel("ALPHA  ·  v0.1.0")
+        sub = QLabel("PRO  ·  v0.3.0")
         sub.setObjectName("logoSub")
         sb_lay.addWidget(logo)
         sb_lay.addWidget(sub)
@@ -92,18 +96,35 @@ class MainWindow(QMainWindow):
             btn = QPushButton(text)
             btn.setObjectName("navBtn")
             btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda _, k=key: self._navigate(k))
             sb_lay.addWidget(btn)
             self.nav_buttons[key] = btn
 
         sb_lay.addStretch()
 
-        quick_label = QLabel("  快捷操作")
-        quick_label.setStyleSheet(f"color: {COLORS['text_mute']}; font-size: 11px; padding: 0 16px;")
-        sb_lay.addWidget(quick_label)
+        # 热键提示
+        hk_label = QLabel("  快捷键")
+        hk_label.setStyleSheet(
+            f"color: {COLORS['text_mute']}; font-size: 10px; "
+            f"padding: 8px 20px 4px 20px; letter-spacing: 1.5px; font-weight: 600;"
+        )
+        sb_lay.addWidget(hk_label)
 
-        self.stop_all_btn = QPushButton("⏹  停止全部")
+        for txt in ["F1-F4  金额档位", "Ctrl+B  狙击最新", "Esc     停止全部"]:
+            lbl = QLabel(f"  {txt}")
+            lbl.setStyleSheet(
+                f"color: {COLORS['text_dim']}; font-size: 10px; "
+                f"padding: 2px 20px; font-family: 'Cascadia Mono', monospace;"
+            )
+            sb_lay.addWidget(lbl)
+
+        sb_lay.addSpacing(14)
+
+        # 停止全部大按钮
+        self.stop_all_btn = QPushButton("⏹  STOP ALL")
         self.stop_all_btn.setObjectName("stopBtn")
+        self.stop_all_btn.setCursor(Qt.PointingHandCursor)
         self.stop_all_btn.clicked.connect(self._stop_all)
         self.stop_all_btn.setEnabled(False)
         stop_wrap = QHBoxLayout()
@@ -115,7 +136,9 @@ class MainWindow(QMainWindow):
 
         # ---------- Main content ----------
         self.stack = QStackedWidget()
+
         self.dashboard_page = DashboardPage()
+        self.trenches_page = TrenchesPage(self.runner)
         self.upcoming_page = UpcomingPage(self.runner)
         self.functions_page = FunctionsPage()
         self.wallets_page = WalletsPage(self.vault)
@@ -123,6 +146,7 @@ class MainWindow(QMainWindow):
         self.logs_page = LogsPage()
 
         self.stack.addWidget(self.dashboard_page)
+        self.stack.addWidget(self.trenches_page)
         self.stack.addWidget(self.upcoming_page)
         self.stack.addWidget(self.functions_page)
         self.stack.addWidget(self.wallets_page)
@@ -130,47 +154,43 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.logs_page)
 
         self._page_index = {
-            "dashboard": 0, "upcoming": 1, "functions": 2,
-            "wallets": 3, "api": 4, "logs": 5,
+            "dashboard": 0, "trenches": 1, "upcoming": 2,
+            "functions": 3, "wallets": 4, "api": 5, "logs": 6,
         }
 
         root.addWidget(self.stack, 1)
         self._navigate("dashboard")
 
     def _wire(self) -> None:
-        # 功能卡片 -> 启停
+        # 功能启停
         self.functions_page.fn_toggled.connect(self._on_fn_toggle)
-        # Runner -> UI
+
+        # Runner 事件
         self.runner.fn_started.connect(self._on_fn_started)
         self.runner.fn_stopped.connect(self._on_fn_stopped)
         self.runner.fn_error.connect(self._on_fn_error)
-        # SignalBus 数据流
         self.runner.signal_emitted.connect(self._on_bus_signal)
         self.runner.position_updated.connect(self._on_bus_position)
         self.runner.bus_log.connect(self._on_bus_log)
-        # 配置保存 -> 刷新 runner 用的 cfg
+
+        # Quick Snipe (dashboard)
+        self.dashboard_page.quick_buy_requested.connect(self._on_quick_buy)
+
+        # Trenches 买卖
+        self.trenches_page.buy_requested.connect(self._on_quick_buy)
+        self.trenches_page.sell_requested.connect(self._on_quick_sell)
+
+        # 配置刷新
         self.api_page.api_saved.connect(self._on_config_changed)
         self.api_page.api_saved.connect(self.wallets_page._refresh_lock_hint)
         self.api_page.api_saved.connect(self.wallets_page._refresh_table)
         self.wallets_page.wallets_changed.connect(self._on_config_changed)
 
-    def _prompt_unlock_at_startup(self) -> None:
-        pwd, ok = QInputDialog.getText(
-            self, "解锁保险箱",
-            "检测到已保存的配置。请输入主密码以加载 API Key 和钱包：",
-            QLineEdit.Password,
-        )
-        if not ok or not pwd:
-            return
-        try:
-            self.vault.unlock(pwd)
-            self._on_config_changed()
-            # 触发页面刷新
-            self.api_page.refresh()
-            self.wallets_page._refresh_lock_hint()
-            self.wallets_page._refresh_table()
-        except Exception as e:
-            QMessageBox.warning(self, "解锁失败", str(e))
+    def _setup_hotkeys(self) -> None:
+        self.hotkeys = HotkeyManager(self)
+        self.hotkeys.stop_all.connect(self._stop_all)
+        self.hotkeys.quick_buy_latest.connect(self._hotkey_buy_latest)
+        self.hotkeys.preset_amount_triggered.connect(self._hotkey_preset)
 
     # ---------- 导航 ----------
 
@@ -179,51 +199,41 @@ class MainWindow(QMainWindow):
             btn.setChecked(k == key)
         self.stack.setCurrentIndex(self._page_index[key])
 
-    # ---------- 功能启停 ----------
+    # ---------- 解锁 ----------
+
+    def _prompt_unlock_at_startup(self) -> None:
+        pwd, ok = QInputDialog.getText(
+            self, "解锁保险箱",
+            "检测到已保存的配置。\n请输入主密码以加载 API Key 和钱包：",
+            QLineEdit.Password,
+        )
+        if not ok or not pwd:
+            return
+        try:
+            self.vault.unlock(pwd)
+            self._on_config_changed()
+            self.api_page.refresh()
+            self.wallets_page._refresh_lock_hint()
+            self.wallets_page._refresh_table()
+        except Exception as e:
+            QMessageBox.warning(self, "解锁失败", str(e))
+
+    # ---------- 策略启停 ----------
 
     def _on_fn_toggle(self, fn_code: str, should_run: bool) -> None:
         if should_run:
-            # 启动前确认钱包/配置
-            if not self.vault.is_locked():
-                self._warm_check(fn_code)
             self.runner.start_fn(fn_code, dry_run=True)
-            # 立即给用户反馈：写入日志 + 切到日志页
-            self.logs_page.append_log("INFO", f"▶ 启动 {fn_code}... 连接 RPC 中")
-            self.dashboard_page.push_signal(
-                datetime.now().strftime("%H:%M:%S"),
-                fn_code, "START", 0, "正在启动策略"
-            )
-            # 弹出轻量气泡提示
-            QMessageBox.information(
-                self, "已启动",
-                f"✓ {fn_code} 已启动。\n\n"
-                f"正在后台连接 RPC + 监听链上事件。\n"
-                f"请切换到【📜 日志】页面查看实时状态。",
-            )
+            self.logs_page.append_log("INFO", f"▶ 启动 {fn_code}... 正在连接 RPC")
         else:
             self.runner.stop_fn(fn_code)
             self.logs_page.append_log("WARNING", f"■ 停止 {fn_code}")
-
-    def _warm_check(self, fn_code: str) -> bool:
-        """启动前检查：是否有对应链的钱包、RPC 是否设置"""
-        from functions import REGISTRY
-        chain = REGISTRY[fn_code]["chain"]
-        if self.vault.is_locked():
-            return True
-        if not self.vault.get_private_key(chain):
-            QMessageBox.information(
-                self, "提示",
-                f"未配置 {chain} 钱包。将以 DRY_RUN 模式运行（不下单，仅检测）。\n"
-                f"如需实盘，请先到『钱包』页面导入私钥。",
-            )
-        return True
 
     def _on_fn_started(self, fn_code: str) -> None:
         self.functions_page.set_running(fn_code, True)
         running = self.runner.running_set()
         self.dashboard_page.update_running_count(running)
         self.stop_all_btn.setEnabled(len(running) > 0)
-        self.logs_page.append_log("SUCCESS", f"✓ {fn_code} 已启动，正在监听链上事件")
+        self.logs_page.append_log("SUCCESS", f"✓ {fn_code} 已启动，正在监听")
 
     def _on_fn_stopped(self, fn_code: str) -> None:
         self.functions_page.set_running(fn_code, False)
@@ -238,29 +248,89 @@ class MainWindow(QMainWindow):
     def _stop_all(self) -> None:
         for fn_code in list(self.runner.running_set()):
             self.runner.stop_fn(fn_code)
+        self.logs_page.append_log("WARNING", "⏹ 已停止所有策略")
 
-    # ---------- Bus 事件 -> Dashboard ----------
+    # ---------- Quick Buy / Sell ----------
+
+    def _on_quick_buy(self, chain: str, mint: str, amount: float, slippage_bps: int) -> None:
+        """用户从任何面板触发的一键买入"""
+        # 检查钱包
+        if not self.vault.is_locked():
+            pk = self.vault.get_private_key(chain)
+            if not pk:
+                ret = QMessageBox.question(
+                    self, "未配置钱包",
+                    f"{chain} 链没有配置钱包私钥。\n\n"
+                    f"要仅以 DRY_RUN 模式执行（不真实下单）吗？",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                if ret != QMessageBox.Yes:
+                    return
+
+        self.logs_page.append_log(
+            "INFO", f"⚡ 手动买入 {chain}: {mint[:12]}... amount={amount} slip={slippage_bps/100}%"
+        )
+        self.dashboard_page.push_signal(
+            datetime.now().strftime("%H:%M:%S"),
+            chain, mint[:8] + "...", "BUY", amount * 100,  # 粗略估算 USD
+            f"manual buy · slip {slippage_bps/100}%",
+            mint=mint,
+        )
+
+        # 通过 runner 在 asyncio loop 中执行
+        self.runner.manual_trade(chain, mint, "buy", amount, slippage_bps)
+
+    def _on_quick_sell(self, chain: str, mint: str, percent: int, slippage_bps: int) -> None:
+        self.logs_page.append_log(
+            "INFO", f"⚡ 卖出 {chain}: {mint[:12]}... {percent}%"
+        )
+        self.runner.manual_trade(chain, mint, "sell", percent, slippage_bps)
+
+    # ---------- SignalBus → UI ----------
 
     def _on_bus_signal(self, fn_code: str, token: str, action: str,
                        amount: float, note: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")
-        self.dashboard_page.push_signal(ts, token, action, amount, f"[{fn_code}] {note}")
+        from functions import REGISTRY
+        chain = REGISTRY.get(fn_code, {}).get("chain", "?")
+        self.dashboard_page.push_signal(ts, chain, token, action, amount, f"[{fn_code}] {note}")
+        self._latest_mint = (chain, token)
 
     def _on_bus_position(self, fn_code: str, token: str,
                          entry: float, current: float, size: float) -> None:
         key = f"{fn_code}:{token}"
+        from functions import REGISTRY
+        chain = REGISTRY.get(fn_code, {}).get("chain", "solana")
         self._positions[key] = {
-            "token": token, "entry": entry, "current": current, "size_usd": size,
+            "token": token, "entry": entry, "current": current,
+            "size_usd": size, "chain": chain, "mint": token,
         }
         self.dashboard_page.update_positions(list(self._positions.values()))
 
     def _on_bus_log(self, fn_code: str, level: str, msg: str) -> None:
         self.logs_page.append_log(level, f"[{fn_code}] {msg}")
 
-    # ---------- 配置刷新 ----------
+    # ---------- 热键 ----------
+
+    def _hotkey_buy_latest(self) -> None:
+        if not self._latest_mint:
+            self.logs_page.append_log("WARNING", "⚡ 没有最新信号可用")
+            return
+        chain, mint = self._latest_mint
+        self._on_quick_buy(chain, mint, 0.1, 500)
+
+    def _hotkey_preset(self, idx: int) -> None:
+        # 往 quick snipe 面板的金额填默认档位
+        presets = [0.1, 0.5, 1.0, 5.0]
+        if 0 <= idx < len(presets):
+            self.dashboard_page.quick_snipe.amount_input.setText(str(presets[idx]))
+            self.logs_page.append_log(
+                "INFO", f"F{idx+1}: 金额已设为 {presets[idx]}"
+            )
+
+    # ---------- 配置 ----------
 
     def _on_config_changed(self) -> None:
-        """用户保存了 API Key 或钱包，刷新 runner 的 cfg"""
         reload_from_vault(self.cfg, self.vault)
         self.runner.update_cfg(self.cfg)
         logger.info("config reloaded from vault")

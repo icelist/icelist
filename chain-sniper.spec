@@ -27,8 +27,9 @@ PROJECT_MODULES = [
     'gui', 'gui.main_window', 'gui.theme', 'gui.log_bridge', 'gui.runner',
     'gui.pages', 'gui.pages.dashboard_page', 'gui.pages.functions_page',
     'gui.pages.wallets_page', 'gui.pages.api_page', 'gui.pages.logs_page',
-    'gui.pages.upcoming_page',
-    'gui.widgets', 'gui.widgets.cards',
+    'gui.pages.upcoming_page', 'gui.pages.trenches_page',
+    'gui.widgets', 'gui.widgets.cards', 'gui.widgets.token_card',
+    'gui.hotkeys',
     # ui（CLI 模式）
     'ui', 'ui.banner', 'ui.dashboard', 'ui.menu', 'ui.theme',
 ]

@@ -18,7 +18,7 @@ LEVEL_COLORS = {
     "INFO":    COLORS["accent"],
     "SUCCESS": COLORS["success"],
     "WARNING": COLORS["warn"],
-    "ERROR":   COLORS["error"],
+    "ERROR":   COLORS["danger"],
     "CRITICAL": "#ff3860",
 }
 

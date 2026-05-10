@@ -119,3 +119,72 @@ class StrategyRunner(QObject):
 
     def running_set(self) -> set[str]:
         return {c for c, t in self._tasks.items() if not t.done()}
+
+    # ---------- 手动交易 ----------
+
+    def manual_trade(self, chain: str, mint: str, action: str,
+                     amount_or_pct: float, slippage_bps: int) -> None:
+        """
+        手动一键买卖（从 Trenches / Dashboard / Token Card 触发）
+        action: 'buy' 时 amount_or_pct 是 SOL/BNB/ETH 数量
+                'sell' 时 amount_or_pct 是持仓百分比（50/100）
+        """
+        if self._loop is None or not self._loop.is_running():
+            self.fn_error.emit("manual_trade", "事件循环未启动")
+            return
+        self._loop.call_soon_threadsafe(
+            lambda: self._spawn_manual_trade(chain, mint, action, amount_or_pct, slippage_bps)
+        )
+
+    def _spawn_manual_trade(self, chain: str, mint: str, action: str,
+                             amount: float, slippage_bps: int) -> None:
+        from core.base import TradeSignal, TokenInfo
+        from decimal import Decimal
+
+        async def run():
+            try:
+                client = get_client(chain, self.cfg)
+                await client.connect()
+
+                token = await client.get_token_info(mint)
+
+                # 估算 USD 金额（简化）
+                if action == "buy":
+                    amount_usd = Decimal(str(amount * 150))  # 占位：假设 1 SOL≈$150 等
+                else:
+                    amount_usd = Decimal(str(amount))  # sell 时传 %
+
+                # 覆盖链配置里的滑点
+                self.cfg.setdefault("chains", {}).setdefault(chain, {})["slippage_bps"] = slippage_bps
+
+                signal = TradeSignal(
+                    chain=chain,
+                    token=token,
+                    action=action,
+                    amount_usd=amount_usd,
+                    reason="manual_trade",
+                )
+
+                dry = not self.cfg.get("env", {}).get("_CAN_LIVE", False)
+                # 检查私钥判断是否能实盘
+                pk_key = {"solana": "SOL_PRIVATE_KEY", "ethereum": "ETH_PRIVATE_KEY", "bsc": "BSC_PRIVATE_KEY"}.get(chain)
+                dry = not (pk_key and self.cfg.get("env", {}).get(pk_key))
+
+                result = await client.execute(signal, dry_run=dry)
+
+                mode = "DRY_RUN" if dry else "LIVE"
+                if result.success:
+                    self.bus_log.emit("manual", "SUCCESS",
+                                      f"[{mode}] {action.upper()} {mint[:8]}... tx={result.tx_hash}")
+                else:
+                    self.bus_log.emit("manual", "ERROR",
+                                      f"{action.upper()} failed: {result.error}")
+
+                await client.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.exception("manual trade failed")
+                self.bus_log.emit("manual", "ERROR", f"manual trade: {e}")
+
+        self._loop.create_task(run())
