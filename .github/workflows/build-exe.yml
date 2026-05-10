@@ -8,6 +8,9 @@ on:
     branches: [main, master]
   workflow_dispatch:  # 允许手动触发
 
+permissions:
+  contents: write   # 允许创建 Release 并上传产物
+
 jobs:
   build-windows:
     name: Build Windows EXE
