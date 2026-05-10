@@ -83,8 +83,12 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
-    except BaseException as e:
+        code = main()
+        sys.exit(code if code is not None else 0)
+    except (SystemExit, KeyboardInterrupt):
+        # 正常退出，不当错误处理
+        raise
+    except Exception as e:
         tb = traceback.format_exc()
         crash_file = _write_crash(e)
         _show_error_dialog(tb, crash_file)
