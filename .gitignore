@@ -1,0 +1,32 @@
+# 敏感
+.env
+wallets/
+*.dat
+*.meta
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# 打包产物
+dist/
+build/
+*.spec.bak
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 日志
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp

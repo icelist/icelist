@@ -1,0 +1,46 @@
+# 非敏感配置（可随代码提交到 git；敏感 key 通过 GUI 保险箱管理）
+
+# 每条链的全局参数
+chains:
+  solana:
+    slippage_bps: 500              # 5%
+    priority_fee_lamports: 100000
+    max_position_usd: 50           # 单笔最大 50 美元
+  ethereum:
+    slippage_bps: 300              # 3%
+    gas_boost_pct: 20              # gas 价加价 20% 抢跑
+    max_position_usd: 100
+  bsc:
+    slippage_bps: 500
+    gas_boost_pct: 15
+    max_position_usd: 50
+  base:
+    slippage_bps: 300
+    max_position_usd: 100
+
+# 风控（全局）
+risk:
+  max_daily_loss_usd: 200
+  max_open_positions: 5
+  stop_loss_pct: 50                # 跌 50% 止损
+  take_profit_pct: 200             # 涨 200% 止盈
+
+# 策略参数
+strategies:
+  sniper:
+    min_liquidity_usd: 5000
+    max_buy_tax_pct: 10
+    require_lp_lock: false
+
+  copytrade:
+    target_wallets: []             # 要跟单的钱包地址
+    copy_ratio: 0.05
+
+  launchpad:
+    eth_targets: []
+    bsc_targets: []
+    # 示例：
+    # eth_targets:
+    #   - name: "XYZ Legion"
+    #     contract: "0xabc..."
+    #     start_ts: 1735689600
