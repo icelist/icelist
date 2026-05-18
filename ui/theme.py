@@ -29,6 +29,7 @@ FN_ICONS = {
     "copytrade": "👥",
     "launchpad": "🚀",
     "meme":      "🔥",
+    "arbitrage": "💱",
 }
 
 # 通用 theme
