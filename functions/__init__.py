@@ -17,6 +17,9 @@ from .eth_fns import (
     EthUniswapV2, EthUniswapV3, EthVirtuals,
     EthCopyTrade, EthLaunchpad,
 )
+from arbitrage.arb_functions import (
+    EthCexDexArb, BscCexDexArb, SolCexDexArb,
+)
 
 
 # 格式：(code, chain, display_name, description, category, cls)
@@ -43,6 +46,11 @@ ALL_FUNCTIONS = [
     ("eth.virtuals",     "ethereum", "Virtuals Protocol",     "监听 Virtuals 新 AI Agent 代币",                   "meme",      EthVirtuals),
     ("eth.copytrade",    "ethereum", "聪明钱跟单",            "订阅目标钱包 swap，按比例跟单",                    "copytrade", EthCopyTrade),
     ("eth.launchpad",    "ethereum", "IDO 打新",              "Legion / Echo / CoinList 打新",                    "launchpad", EthLaunchpad),
+
+    # ---------- 套利 (Arbitrage) ----------
+    ("eth.arb_cex_dex",  "ethereum", "ETH CEX-DEX 套利",      "Binance/OKX 与 Uniswap 之间价差套利",              "arbitrage", EthCexDexArb),
+    ("bsc.arb_cex_dex",  "bsc",      "BSC CEX-DEX 套利",      "Binance/OKX 与 PancakeSwap 之间价差套利",          "arbitrage", BscCexDexArb),
+    ("sol.arb_cex_dex",  "solana",   "SOL CEX-DEX 套利",      "Binance/OKX 与 Jupiter 之间价差套利",              "arbitrage", SolCexDexArb),
 ]
 
 

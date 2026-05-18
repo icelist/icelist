@@ -16,6 +16,7 @@ from .pages.functions_page import FunctionsPage
 from .pages.wallets_page import WalletsPage
 from .pages.api_page import ApiPage
 from .pages.logs_page import LogsPage
+from .pages.arbitrage_page import ArbitragePage
 from .log_bridge import LogBridge
 from .runner import StrategyRunner
 
@@ -27,6 +28,7 @@ from core.logger import logger
 NAV_ITEMS = [
     ("dashboard",  "◉  仪表盘",   "实时监控"),
     ("functions",  "⚡  功能",     "启停策略"),
+    ("arbitrage",  "💱  套利",     "CEX-DEX 套利"),
     ("wallets",    "🔑  钱包",     "私钥管理"),
     ("api",        "📡  API 设置", "RPC / 通知"),
     ("logs",       "📜  日志",     "实时日志流"),
@@ -115,19 +117,21 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.dashboard_page = DashboardPage()
         self.functions_page = FunctionsPage()
+        self.arbitrage_page = ArbitragePage()
         self.wallets_page = WalletsPage(self.vault)
         self.api_page = ApiPage(self.vault)
         self.logs_page = LogsPage()
 
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.functions_page)
+        self.stack.addWidget(self.arbitrage_page)
         self.stack.addWidget(self.wallets_page)
         self.stack.addWidget(self.api_page)
         self.stack.addWidget(self.logs_page)
 
         self._page_index = {
-            "dashboard": 0, "functions": 1,
-            "wallets": 2, "api": 3, "logs": 4,
+            "dashboard": 0, "functions": 1, "arbitrage": 2,
+            "wallets": 3, "api": 4, "logs": 5,
         }
 
         root.addWidget(self.stack, 1)
@@ -136,6 +140,8 @@ class MainWindow(QMainWindow):
     def _wire(self) -> None:
         # 功能卡片 -> 启停
         self.functions_page.fn_toggled.connect(self._on_fn_toggle)
+        # 套利页面 -> 启停
+        self.arbitrage_page.arb_toggled.connect(self._on_fn_toggle)
         # Runner -> UI
         self.runner.fn_started.connect(self._on_fn_started)
         self.runner.fn_stopped.connect(self._on_fn_stopped)
@@ -203,12 +209,16 @@ class MainWindow(QMainWindow):
 
     def _on_fn_started(self, fn_code: str) -> None:
         self.functions_page.set_running(fn_code, True)
+        if "arb_cex_dex" in fn_code:
+            self.arbitrage_page.set_running(fn_code, True)
         running = self.runner.running_set()
         self.dashboard_page.update_running_count(running)
         self.stop_all_btn.setEnabled(len(running) > 0)
 
     def _on_fn_stopped(self, fn_code: str) -> None:
         self.functions_page.set_running(fn_code, False)
+        if "arb_cex_dex" in fn_code:
+            self.arbitrage_page.set_running(fn_code, False)
         running = self.runner.running_set()
         self.dashboard_page.update_running_count(running)
         self.stop_all_btn.setEnabled(len(running) > 0)

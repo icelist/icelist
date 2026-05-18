@@ -44,3 +44,33 @@ strategies:
     #   - name: "XYZ Legion"
     #     contract: "0xabc..."
     #     start_ts: 1735689600
+
+  # CEX-DEX 套利配置
+  arbitrage:
+    # 最小价差百分比（低于此值不执行）
+    min_spread_pct: 0.3
+    # 最小净利润（美元）
+    min_profit_usd: 2.0
+    # 单次最大交易金额（美元）
+    max_trade_usd: 500
+    # 单次最小交易金额（美元）
+    min_trade_usd: 50
+    # CEX 手续费率（0.001 = 0.1%）
+    cex_fee_rate: 0.001
+    # DEX 滑点预估百分比
+    dex_slippage_pct: 0.3
+    # 最大 Gas 价格（Gwei），超过不执行
+    max_gas_gwei: 50
+    # 最大同时套利笔数
+    max_concurrent: 3
+    # 同一交易对冷却时间（秒）
+    cooldown_seconds: 10
+    # 执行模式: "atomic"（先完成一端再执行另一端）/ "parallel"（两端同时提交）
+    execution_mode: "atomic"
+    # 扫描间隔（秒）
+    scan_interval: 2.0
+    # 监控的交易对（留空则使用默认列表）
+    # pairs:
+    #   - pair: "ETH/USDT"
+    #     token_address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+    #     chain: "ethereum"

@@ -27,5 +27,9 @@ solana==0.35.1
 solders==0.21.0
 base58==2.1.1
 
+# ========== CEX 套利 ==========
+ccxt==4.4.26                   # 备用：统一 CEX 接口（可选，直接 REST 也够用）
+websockets==12.0               # CEX WebSocket 实时行情
+
 # ========== 打包 ==========
 # pyinstaller 由 build.bat / build.sh 按需安装，避免和 dev 依赖混淆
