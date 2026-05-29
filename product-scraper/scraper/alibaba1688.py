@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import re
 import time
-from urllib.parse import quote_plus, urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs
 
 from loguru import logger
 
 from .base import BaseScraper, Product
-from .utils import parse_price, sleep_random
+from .utils import encode_keyword, parse_price, sleep_random
 
 
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={kw}&beginPage={page}"
@@ -39,7 +39,7 @@ class Alibaba1688Scraper(BaseScraper):
         for page_no in range(1, max_pages + 1):
             if self.controller and self.controller.is_stopping():
                 break
-            url = SEARCH_URL.format(kw=quote_plus(keyword), page=page_no)
+            url = SEARCH_URL.format(kw=encode_keyword(keyword, "gbk"), page=page_no)
             logger.info(f"[1688] 加载搜索页 {page_no}：{url}")
             try:
                 page.get(url, timeout=timeout)

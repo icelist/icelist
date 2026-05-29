@@ -203,6 +203,11 @@ class MainWindow(QMainWindow):
         self.btn_stop.clicked.connect(self._on_stop)
         row2.addWidget(self.btn_stop)
 
+        self.btn_test = QPushButton("🔧  仅打开浏览器（测试）")
+        self.btn_test.setToolTip("只启动 Chrome 并打开两个平台首页，方便你先手动登录、确认环境正常")
+        self.btn_test.clicked.connect(self._on_test_browser)
+        row2.addWidget(self.btn_test)
+
         lay.addLayout(row2)
 
         row3 = QHBoxLayout()
@@ -387,8 +392,15 @@ class MainWindow(QMainWindow):
         zh = {"alibaba1688": "1688", "pinduoduo": "拼多多"}.get(platform, platform)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Information)
-        box.setWindowTitle(f"需要登录 - {zh}")
+        box.setWindowTitle(f"⚠️ 需要登录 - {zh}")
         box.setText(message)
+        # 强制对话框置顶 + 闪烁任务栏图标，避免被浏览器盖住看不见
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        try:
+            from PySide6.QtWidgets import QApplication
+            QApplication.alert(self, 0)
+        except Exception:
+            pass
         btn_done = box.addButton("✅ 已完成，继续抓取", QMessageBox.AcceptRole)
         btn_cancel = box.addButton("❌ 取消，跳过该平台", QMessageBox.RejectRole)
         box.setDefaultButton(btn_done)
@@ -407,6 +419,36 @@ class MainWindow(QMainWindow):
         if self.worker:
             self.worker.stop()
             self._log("WARN", "请求停止...")
+
+    def _on_test_browser(self) -> None:
+        """仅打开浏览器并访问两个平台首页，用于排查环境问题。"""
+        self._log("INFO", "🔧 测试模式：只启动浏览器，不做抓取。")
+        self.btn_test.setEnabled(False)
+        try:
+            from DrissionPage import ChromiumOptions, ChromiumPage
+            self._log("INFO", "正在启动 Chrome / Edge...")
+            opts = ChromiumOptions()
+            opts.set_user_data_path(self.cfg["browser"].get("user_data_dir", ".browser_profile"))
+            opts.set_argument("--disable-blink-features=AutomationControlled")
+            opts.set_argument("--lang=zh-CN")
+            opts.set_argument("--window-size=1280,900")
+            browser = ChromiumPage(opts)
+            self._log("INFO", "浏览器已启动，正在打开 1688...")
+            tab1 = browser.latest_tab
+            tab1.get("https://www.1688.com/")
+            self._log("INFO", "正在打开拼多多...")
+            tab2 = browser.new_tab()
+            tab2.get("https://mobile.yangkeduo.com/")
+            self._log("INFO", "✅ 完成。两个 Tab 都打开了。请在浏览器里手动登录一下；")
+            self._log("INFO", "   登录信息会保存到 .browser_profile/，下次正式抓取免登。")
+            self._log("INFO", "   登录完后可以关掉浏览器窗口，再回 GUI 点【▶ 开始抓取】。")
+        except Exception as exc:
+            self._log("ERROR", f"测试失败：{exc}")
+            QMessageBox.critical(self, "浏览器测试失败",
+                f"无法启动 Chrome / Edge：\n\n{exc}\n\n"
+                "请确认本机已安装 Chrome 或 Edge，并不被杀毒软件拦截。")
+        finally:
+            self.btn_test.setEnabled(True)
 
     def _on_progress(self, cur: int, total: int, msg: str) -> None:
         if total > 0:

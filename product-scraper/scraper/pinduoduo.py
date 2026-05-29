@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import quote_plus, urlparse, parse_qs
+import time
+from urllib.parse import urlparse, parse_qs
 
 from loguru import logger
 
 from .base import BaseScraper, Product
-from .utils import parse_price, sleep_random
+from .utils import encode_keyword, parse_price, sleep_random
 
 
 SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={kw}&page={page}"
@@ -35,7 +36,6 @@ class PinduoduoScraper(BaseScraper):
 
     # ---------------- 搜索 ----------------
     def search(self, keyword: str, max_pages: int, limit: int) -> list[Product]:
-        import time
         page = self.tab
         collected: dict[str, Product] = {}
         timeout = self.config["browser"].get("page_load_timeout", 30)
@@ -43,7 +43,7 @@ class PinduoduoScraper(BaseScraper):
         for page_no in range(1, max_pages + 1):
             if self.controller and self.controller.is_stopping():
                 break
-            url = SEARCH_URL.format(kw=quote_plus(keyword), page=page_no)
+            url = SEARCH_URL.format(kw=encode_keyword(keyword, "utf-8"), page=page_no)
             logger.info(f"[PDD] 加载搜索页 {page_no}：{url}")
             try:
                 page.get(url, timeout=timeout)

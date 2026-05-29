@@ -11,6 +11,10 @@ if str(ROOT) not in sys.path:
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+# 先初始化日志桥，让 import 阶段的所有 loguru 日志都能进 GUI
+from gui.log_bridge import LogBridge  # noqa: E402
+LogBridge.instance()
+
 from gui.main_window import MainWindow  # noqa: E402
 from gui.theme import QSS  # noqa: E402
 

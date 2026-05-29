@@ -8,12 +8,25 @@ import re
 import time
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import quote_from_bytes
 
 import requests
 from loguru import logger
 
 
 PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)")
+
+
+def encode_keyword(keyword: str, encoding: str = "utf-8") -> str:
+    """把关键词按指定编码 percent-encode。
+    1688 历史上用 GBK，PDD 用 UTF-8。给错编码会导致网站搜索栏显示乱码。
+    """
+    if not keyword:
+        return ""
+    try:
+        return quote_from_bytes(keyword.encode(encoding))
+    except (UnicodeEncodeError, LookupError):
+        return quote_from_bytes(keyword.encode("utf-8"))
 
 
 def parse_price(text: str | None) -> float | None:
