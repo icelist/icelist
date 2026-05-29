@@ -3,12 +3,11 @@ DrissionPage>=4.1.0          # 浏览器渲染 + 网络抓包，对 1688/PDD 友
 requests>=2.31.0
 lxml>=4.9.3
 
-# 数据处理 / 输出
-pandas>=2.1.0
-openpyxl>=3.1.2              # Excel 输出
+# 数据输出（不用 pandas / numpy，纯 openpyxl，避免 PyInstaller 打包坑 + 大幅减小 EXE）
+openpyxl>=3.1.2
 PyYAML>=6.0.1
 tqdm>=4.66.0
-Pillow>=10.0.0               # 图片处理
+Pillow>=10.0.0               # 图片处理（可选）
 
 # 工具
 tenacity>=8.2.3

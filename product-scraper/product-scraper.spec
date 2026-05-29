@@ -49,7 +49,6 @@ THIRDPARTY_HIDDEN = [
     "tenacity",
     "tqdm",
     "openpyxl",
-    "pandas",
     "lxml",
     "lxml.etree",
     "PIL",
@@ -82,6 +81,10 @@ a = Analysis(
         "PyQt5",
         "PyQt6",
         "PySide2",
+        # 不再需要 pandas/numpy，显式排除以减小体积
+        "pandas",
+        "numpy",
+        "scipy",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
