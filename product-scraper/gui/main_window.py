@@ -182,8 +182,9 @@ class MainWindow(QMainWindow):
         self.sp_pages.setValue(int(self.cfg.get("max_pages", 2)))
         row2.addWidget(self.sp_pages)
 
-        self.cb_dl_img = QCheckBox("下载图片")
-        self.cb_dl_img.setChecked(bool(self.cfg.get("download_images", True)))
+        self.cb_dl_img = QCheckBox("Excel 中嵌入图片")
+        self.cb_dl_img.setChecked(True)  # 默认开，否则就只能看 URL
+        self.cb_dl_img.setToolTip("勾上后导出会先下载图片，并把缩略图嵌入 Excel 第一列；不勾就只导出 URL")
         row2.addWidget(self.cb_dl_img)
 
         self.cb_headless = QCheckBox("无头浏览器（不推荐）")
@@ -635,11 +636,14 @@ class MainWindow(QMainWindow):
         storage = Storage(out_cfg)
 
         if self.cb_dl_img.isChecked():
-            self._log("INFO", f"开始下载选中商品图片到 {out_dir}/images ...")
+            self._log("INFO", f"开始下载 {len(chosen)} 件商品的图片到 {out_dir}/images ...")
+            self._log("INFO", "（图片会嵌入 Excel 第一列，下载时间和数量成正比）")
             try:
                 storage.download_images_for(chosen)
             except Exception as exc:
                 self._log("WARN", f"图片下载部分失败：{exc}（继续导出）")
+        else:
+            self._log("INFO", "未勾选'Excel 嵌入图片'，导出仅含图片 URL 不含图。")
 
         paths = storage.save(chosen)
         if not paths:
