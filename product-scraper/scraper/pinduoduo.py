@@ -1,0 +1,370 @@
+"""拼多多 抓取器（移动端站点）."""
+from __future__ import annotations
+
+import json
+import re
+import time
+from urllib.parse import urlparse, parse_qs
+
+from loguru import logger
+
+from .base import BaseScraper, Product
+from .utils import encode_keyword, parse_price, sleep_random
+
+
+SEARCH_URL = "https://mobile.yangkeduo.com/search_result.html?search_key={kw}&page={page}"
+DETAIL_URL = "https://mobile.yangkeduo.com/goods.html?goods_id={pid}"
+HOME_URL = "https://mobile.yangkeduo.com/"
+
+ID_RE = re.compile(r"goods_id=(\d+)")
+ID_IN_HTML_RE = re.compile(r'(?:goodsId|goods_id)["\']?\s*[:=]\s*["\']?(\d{6,})')
+RAW_DATA_RE = re.compile(r"window\.rawData\s*=\s*(\{.+?\});", re.S)
+
+# PDD 图片 CDN
+PDD_IMG_HOST_RE = re.compile(r"(pddpic|pdd|yangkeduo|pinduoduo)", re.I)
+PDD_IMG_URL_IN_HTML_RE = re.compile(
+    r'(?:https?:)?//[^"\'\s<>]*?(?:pddpic|yangkeduo|pinduoduo)[^"\'\s<>]*?\.(?:jpg|jpeg|png|webp|gif)',
+    re.I,
+)
+
+
+def _is_pdd_image(url: str) -> bool:
+    if not url or not url.startswith(("http", "//")):
+        return False
+    if not PDD_IMG_HOST_RE.search(url):
+        return False
+    lower = url.lower()
+    if any(s in lower for s in ("logo", "icon", "avatar", "1x1")):
+        return False
+    return True
+
+
+def _norm_pdd_url(url: str) -> str:
+    if url.startswith("//"):
+        url = "https:" + url
+    return url
+
+
+def _img_attrs(img_el) -> list[str]:
+    out = []
+    for attr in ("src", "data-src", "data-original", "data-lazy-src",
+                 "data-image", "data-srcset", "srcset"):
+        try:
+            v = img_el.attr(attr)
+        except Exception:
+            continue
+        if not v:
+            continue
+        if " " in v and "," in v:
+            for part in v.split(","):
+                u = part.strip().split(" ")[0]
+                if u:
+                    out.append(u)
+        else:
+            out.append(v)
+    return out
+
+
+class PinduoduoScraper(BaseScraper):
+    name = "pinduoduo"
+    home_url = HOME_URL
+
+    def is_login_page(self, page) -> bool:
+        # PDD 经常用反爬验证页（JS challenge），URL 也可能不变；多看 html 关键词
+        if super().is_login_page(page):
+            return True
+        try:
+            html = (page.html or "")[:3000]
+        except Exception:
+            html = ""
+        return any(k in html for k in ("anti_content", "请进行验证", "验证码"))
+
+    # ---------------- 搜索 ----------------
+    def search(self, keyword: str, max_pages: int, limit: int) -> list[Product]:
+        page = self.tab
+        collected: dict[str, Product] = {}
+        timeout = self.config["browser"].get("page_load_timeout", 30)
+
+        for page_no in range(1, max_pages + 1):
+            if self.controller and self.controller.is_stopping():
+                break
+            url = SEARCH_URL.format(kw=encode_keyword(keyword, "utf-8"), page=page_no)
+            logger.info(f"[PDD] 加载搜索页 {page_no}：{url}")
+            try:
+                page.get(url, timeout=timeout)
+            except Exception as exc:
+                logger.warning(f"[PDD] 搜索页加载失败：{exc}")
+                continue
+            time.sleep(2.0)
+
+            if not self.ensure_logged_in(page, target_url=url, timeout_each_load=timeout):
+                logger.warning("[PDD] 用户取消或未通过登录。")
+                break
+
+            for _ in range(5):
+                try:
+                    page.scroll.to_bottom()
+                except Exception:
+                    pass
+                sleep_random([0.6, 1.2])
+
+            anchors = page.eles("css:a")  # 扫描所有 a 标签，靠 href regex 过滤
+            try:
+                logger.info(f"[PDD] 当前页：{page.url}")
+                logger.info(f"[PDD] 页面标题：{page.title}")
+            except Exception:
+                pass
+
+            # 先按 href 抽商品 ID
+            id_to_anchor: dict[str, object] = {}
+            for a in anchors:
+                try:
+                    href = a.attr("href") or ""
+                except Exception:
+                    continue
+                m = ID_RE.search(href)
+                if m and m.group(1) not in id_to_anchor:
+                    id_to_anchor[m.group(1)] = a
+
+            # 兜底：从 HTML 源码里抽
+            if not id_to_anchor:
+                try:
+                    html = page.html or ""
+                except Exception:
+                    html = ""
+                for m in ID_IN_HTML_RE.finditer(html):
+                    pid = m.group(1)
+                    id_to_anchor.setdefault(pid, None)
+
+            logger.info(f"[PDD] 第 {page_no} 页提取到 {len(id_to_anchor)} 个商品")
+
+            if not id_to_anchor:
+                try:
+                    snippet = (page.html or "")[:1500]
+                    logger.warning(f"[PDD] 0 件！页面片段：{snippet}")
+                except Exception:
+                    pass
+                logger.warning(
+                    "[PDD] 没找到商品。可能原因：1) 未登录；2) PDD 反爬；3) 搜索结果空。"
+                    "请在 PDD Tab 手动确认能看到商品列表。"
+                )
+                continue
+
+            for pid, a in id_to_anchor.items():
+                if pid in collected:
+                    continue
+                title = ""
+                price_text, price = None, None
+                imgs: list[str] = []
+                if a is not None:
+                    try:
+                        title = (a.attr("title") or "").strip()
+                        if not title:
+                            title_el = a.ele("css:.goods-name, .name, [class*='title']", timeout=0.3)
+                            title = title_el.text.strip() if title_el else a.text.strip().split("\n")[0]
+                        price_el = a.ele("css:[class*='price']", timeout=0.3)
+                        if price_el:
+                            price_text = price_el.text.strip()
+                            price = parse_price(price_text)
+                        # 图片：在 a + 父容器里扫
+                        container = a
+                        try:
+                            p = a.parent()
+                            if p:
+                                container = p
+                        except Exception:
+                            pass
+                        for img_el in container.eles("css:img"):
+                            for u in _img_attrs(img_el):
+                                if _is_pdd_image(u):
+                                    nu = _norm_pdd_url(u)
+                                    if nu not in imgs:
+                                        imgs.append(nu)
+                                    break
+                            if len(imgs) >= 3:
+                                break
+                    except Exception:
+                        pass
+
+                collected[pid] = Product(
+                    platform=self.name,
+                    product_id=pid,
+                    title=title,
+                    url=DETAIL_URL.format(pid=pid),
+                    keyword=keyword,
+                    price=price,
+                    price_text=price_text,
+                    images=imgs,
+                )
+                if len(collected) >= limit:
+                    break
+            if len(collected) >= limit:
+                break
+
+        logger.info(f"[PDD] 关键词 '{keyword}' 共采集 {len(collected)} 条")
+        return list(collected.values())[:limit]
+
+    # ---------------- 详情 ----------------
+    def fetch_detail(self, product: Product) -> Product:
+        page = self.tab
+        timeout = self.config["browser"].get("page_load_timeout", 30)
+        try:
+            page.get(product.url, timeout=timeout)
+        except Exception as exc:
+            logger.warning(f"[PDD] 详情加载失败 {product.url}: {exc}")
+            return product
+        sleep_random(self.config["browser"]["request_interval"])
+
+        if not self.ensure_logged_in(page, target_url=product.url, timeout_each_load=timeout):
+            return product
+
+        try:
+            html = page.html or ""
+        except Exception:
+            html = ""
+        raw = self._extract_raw_data(html)
+        if raw:
+            self._fill_from_raw(product, raw)
+        else:
+            self._fill_from_dom(page, product)
+        return product
+
+    def parse_url(self, url: str) -> Product | None:
+        qs = parse_qs(urlparse(url).query)
+        pid = qs.get("goods_id", [None])[0] or qs.get("goodsId", [None])[0]
+        if not pid:
+            m = ID_RE.search(url)
+            pid = m.group(1) if m else None
+        if not pid:
+            return None
+        return self.fetch_detail(Product(
+            platform=self.name, product_id=pid, title="",
+            url=DETAIL_URL.format(pid=pid),
+        ))
+
+    @staticmethod
+    def _extract_raw_data(html: str) -> dict | None:
+        m = RAW_DATA_RE.search(html)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError:
+            return None
+
+    def _fill_from_raw(self, product: Product, raw: dict) -> None:
+        store = raw.get("store") or raw.get("initDataObj") or {}
+        goods = (
+            store.get("data", {}).get("ssrData", {}).get("storeInfo", {}).get("goods")
+            or store.get("data", {}).get("goods")
+            or store.get("goods")
+            or {}
+        )
+        if not goods:
+            goods = self._deep_find_goods(raw) or {}
+        if not goods:
+            return
+
+        product.title = goods.get("goodsName") or product.title
+        min_p = goods.get("minOnSaleGroupPrice") or goods.get("minGroupPrice")
+        max_p = goods.get("maxOnSaleGroupPrice") or goods.get("maxGroupPrice")
+        if isinstance(min_p, (int, float)):
+            product.price = round(min_p / 100, 2)
+            if isinstance(max_p, (int, float)) and max_p != min_p:
+                product.price_text = f"{product.price} - {round(max_p / 100, 2)}"
+            else:
+                product.price_text = f"{product.price}"
+
+        gallery = goods.get("viewImageData") or goods.get("topGallery") or []
+        if isinstance(gallery, list):
+            product.images = [g if isinstance(g, str) else g.get("url", "") for g in gallery if g][:10]
+
+        specs = goods.get("goodsProperty") or goods.get("propertyInfoList") or []
+        spec_dict: dict[str, str] = {}
+        if isinstance(specs, list):
+            for item in specs:
+                k = item.get("key") or item.get("name")
+                vals = item.get("values") or item.get("value")
+                if isinstance(vals, list):
+                    vals = ",".join(str(v) for v in vals)
+                if k:
+                    spec_dict[str(k)] = str(vals or "")
+        product.specs = spec_dict
+
+        # 从 spec dict 抽常用字段
+        for k, v in spec_dict.items():
+            if k == "品牌": product.brand = v
+            elif k == "产地": product.origin = v
+            elif k == "材质": product.material = v
+
+        features = goods.get("goodsDesc") or goods.get("sellingPoint") or []
+        if isinstance(features, str):
+            features = [features]
+        product.features = [f for f in features if f][:10]
+
+        # 描述
+        desc = goods.get("goodsDesc") or goods.get("description") or ""
+        if isinstance(desc, list):
+            desc = "\n".join(str(d) for d in desc)
+        product.description = str(desc)[:3000]
+
+        cat = goods.get("catName") or goods.get("category")
+        if cat:
+            product.category_path = str(cat)
+        mall = raw.get("store", {}).get("data", {}).get("ssrData", {}).get("mallInfo") or {}
+        product.shop = mall.get("mallName") or product.shop
+        sales = goods.get("salesTip") or goods.get("sideSalesTip")
+        if sales:
+            product.sales = str(sales)
+
+    def _deep_find_goods(self, obj):
+        if isinstance(obj, dict):
+            if "goodsName" in obj and "goodsId" in obj:
+                return obj
+            for v in obj.values():
+                r = self._deep_find_goods(v)
+                if r:
+                    return r
+        elif isinstance(obj, list):
+            for v in obj:
+                r = self._deep_find_goods(v)
+                if r:
+                    return r
+        return None
+
+    def _fill_from_dom(self, page, product: Product) -> None:
+        title_el = page.ele("css:.goods-name, h1, [class*='title']", timeout=2)
+        if title_el and title_el.text.strip():
+            product.title = title_el.text.strip()
+        price_el = page.ele("css:[class*='price']", timeout=2)
+        if price_el:
+            product.price_text = price_el.text.strip().replace("\n", " ")
+            product.price = parse_price(product.price_text)
+
+        # 图片 - DOM 无关多层兜底
+        imgs: list[str] = list(product.images)
+        try:
+            for img in page.eles("css:img"):
+                for u in _img_attrs(img):
+                    if _is_pdd_image(u):
+                        nu = _norm_pdd_url(u)
+                        if nu not in imgs:
+                            imgs.append(nu)
+                        break
+                if len(imgs) >= 10:
+                    break
+        except Exception:
+            pass
+        # HTML regex 兜底
+        if len(imgs) < 3:
+            try:
+                html = page.html or ""
+            except Exception:
+                html = ""
+            for m in PDD_IMG_URL_IN_HTML_RE.finditer(html):
+                u = _norm_pdd_url(m.group(0))
+                if u not in imgs:
+                    imgs.append(u)
+                if len(imgs) >= 15:
+                    break
+        product.images = imgs[:10]

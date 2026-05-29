@@ -1,0 +1,103 @@
+name: Build Product Scraper exe
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'product-scraper/**'
+      - '.github/workflows/build-product-scraper.yml'
+  # 单独的 tag 触发：避开 paths 过滤
+  create:
+  pull_request:
+    paths:
+      - 'product-scraper/**'
+      - '.github/workflows/build-product-scraper.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: product-scraper
+
+# 让 GITHUB_TOKEN 有权限创建 Release / 上传 assets
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # 只在 push 到分支 / PR / tag 创建 / 手动触发时跑（过滤掉 branch create 重复触发）
+    if: |
+      github.event_name != 'create' ||
+      (github.event_name == 'create' && startsWith(github.ref, 'refs/tags/ps-v'))
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: product-scraper/requirements.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip wheel setuptools
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller==6.11.1
+
+      - name: Quick import test
+        run: |
+          python -c "import app; print('app module OK')"
+          python -c "from gui.main_window import MainWindow; print('GUI OK')"
+          python -c "from scraper.classifier import classify_products; from scraper.storage import Storage; print('scraper OK')"
+
+      - name: Build exe with PyInstaller
+        run: pyinstaller product-scraper.spec --clean --noconfirm
+
+      - name: Verify build output
+        shell: bash
+        run: |
+          if [ ! -f "dist/ProductScraper.exe" ]; then
+            echo "ProductScraper.exe not found!"
+            ls -la dist/
+            exit 1
+          fi
+          ls -lh dist/ProductScraper.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProductScraper-Windows-${{ github.sha }}
+          path: product-scraper/dist/ProductScraper.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create Release (on ps-v* tag)
+        if: startsWith(github.ref, 'refs/tags/ps-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: product-scraper/dist/ProductScraper.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          name: Product Scraper ${{ github.ref_name }}
+          body: |
+            ## Product Scraper EXE
+
+            **直接下载（无需登录）**：拉到下方 Assets 区域点 `ProductScraper.exe`
+
+            ### 使用步骤
+            1. 把 EXE 放到一个独立文件夹（不要放桌面/C盘根目录）
+            2. 本机要装 Chrome 或用系统自带的 Edge
+            3. 双击运行，第一次会被 Defender 拦，点"更多信息 → 仍要运行"
+            4. 取消勾选"无头浏览器"，填关键词，点开始抓取
+            5. 弹出的真浏览器里手动登录 1688 / 拼多多 一次（之后免登）
+            6. 抓取完毕 → 一键全选 → 一键导出 → Excel 自动按类别分 Sheet
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
