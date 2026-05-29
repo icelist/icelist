@@ -6,7 +6,8 @@ on:
     paths:
       - 'product-scraper/**'
       - '.github/workflows/build-product-scraper.yml'
-    tags: ['ps-v*']
+  # 单独的 tag 触发：避开 paths 过滤
+  create:
   pull_request:
     paths:
       - 'product-scraper/**'
@@ -22,6 +23,10 @@ jobs:
     name: Build Windows EXE
     runs-on: windows-latest
     timeout-minutes: 30
+    # 只在 push 到分支 / PR / tag 创建 / 手动触发时跑（过滤掉 branch create 重复触发）
+    if: |
+      github.event_name != 'create' ||
+      (github.event_name == 'create' && startsWith(github.ref, 'refs/tags/ps-v'))
 
     steps:
       - name: Checkout
@@ -77,5 +82,18 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          name: Product Scraper ${{ github.ref_name }}
+          body: |
+            ## Product Scraper EXE
+
+            **直接下载（无需登录）**：拉到下方 Assets 区域点 `ProductScraper.exe`
+
+            ### 使用步骤
+            1. 把 EXE 放到一个独立文件夹（不要放桌面/C盘根目录）
+            2. 本机要装 Chrome 或用系统自带的 Edge
+            3. 双击运行，第一次会被 Defender 拦，点"更多信息 → 仍要运行"
+            4. 取消勾选"无头浏览器"，填关键词，点开始抓取
+            5. 弹出的真浏览器里手动登录 1688 / 拼多多 一次（之后免登）
+            6. 抓取完毕 → 一键全选 → 一键导出 → Excel 自动按类别分 Sheet
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
