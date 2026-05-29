@@ -1,0 +1,81 @@
+name: Build Product Scraper exe
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'product-scraper/**'
+      - '.github/workflows/build-product-scraper.yml'
+    tags: ['ps-v*']
+  pull_request:
+    paths:
+      - 'product-scraper/**'
+      - '.github/workflows/build-product-scraper.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: product-scraper
+
+jobs:
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: product-scraper/requirements.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip wheel setuptools
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller==6.11.1
+
+      - name: Quick import test
+        run: |
+          python -c "import app; print('app module OK')"
+          python -c "from gui.main_window import MainWindow; print('GUI OK')"
+          python -c "from scraper.classifier import classify_products; from scraper.storage import Storage; print('scraper OK')"
+
+      - name: Build exe with PyInstaller
+        run: pyinstaller product-scraper.spec --clean --noconfirm
+
+      - name: Verify build output
+        shell: bash
+        run: |
+          if [ ! -f "dist/ProductScraper.exe" ]; then
+            echo "ProductScraper.exe not found!"
+            ls -la dist/
+            exit 1
+          fi
+          ls -lh dist/ProductScraper.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProductScraper-Windows-${{ github.sha }}
+          path: product-scraper/dist/ProductScraper.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create Release (on ps-v* tag)
+        if: startsWith(github.ref, 'refs/tags/ps-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: product-scraper/dist/ProductScraper.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

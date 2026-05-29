@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 打包产物
+build/
+dist/
+*.spec.bak
+
+# 浏览器数据 / 输出
+.browser_profile/
+output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
