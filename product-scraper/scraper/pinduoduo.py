@@ -35,6 +35,7 @@ class PinduoduoScraper(BaseScraper):
 
     # ---------------- 搜索 ----------------
     def search(self, keyword: str, max_pages: int, limit: int) -> list[Product]:
+        import time
         page = self.tab
         collected: dict[str, Product] = {}
         timeout = self.config["browser"].get("page_load_timeout", 30)
@@ -43,20 +44,19 @@ class PinduoduoScraper(BaseScraper):
             if self.controller and self.controller.is_stopping():
                 break
             url = SEARCH_URL.format(kw=quote_plus(keyword), page=page_no)
-            logger.info(f"[PDD] 搜索 {keyword} 第 {page_no} 页")
+            logger.info(f"[PDD] 加载搜索页 {page_no}：{url}")
             try:
                 page.get(url, timeout=timeout)
             except Exception as exc:
-                logger.warning(f"[PDD] 页面加载失败：{exc}")
+                logger.warning(f"[PDD] 搜索页加载失败：{exc}")
                 continue
-            sleep_random(self.config["browser"]["request_interval"])
+            time.sleep(2.0)
 
             if not self.ensure_logged_in(page, target_url=url, timeout_each_load=timeout):
                 logger.warning("[PDD] 用户取消或未通过登录。")
                 break
 
-            # 滚动加载更多商品
-            for _ in range(4):
+            for _ in range(5):
                 try:
                     page.scroll.to_bottom()
                 except Exception:
@@ -64,8 +64,21 @@ class PinduoduoScraper(BaseScraper):
                 sleep_random([0.6, 1.2])
 
             anchors = page.eles("css:a[href*='goods.html?goods_id=']")
+            try:
+                logger.info(f"[PDD] 当前页：{page.url}")
+                logger.info(f"[PDD] 页面标题：{page.title}")
+            except Exception:
+                pass
+            logger.info(f"[PDD] 第 {page_no} 页找到 {len(anchors)} 个商品卡片")
+
             if not anchors:
-                logger.warning(f"[PDD] 第{page_no}页没找到商品卡片。")
+                logger.warning(
+                    "[PDD] 没找到商品卡片。可能原因："
+                    "1) 你还没在 PDD Tab 登录；"
+                    "2) PDD 反爬触发；"
+                    "3) 搜索结果为空。"
+                    "请在 PDD Tab 手动确认能看到商品列表，再点【已完成】重试。"
+                )
                 continue
 
             for a in anchors:

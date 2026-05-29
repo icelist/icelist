@@ -1,7 +1,8 @@
-"""后台抓取线程：每个平台一个独立 Tab，并行打开供用户登录."""
+"""后台抓取线程：每个平台一个独立 Tab；按需登录；详细进度日志."""
 from __future__ import annotations
 
 from PySide6.QtCore import QMutex, QThread, QWaitCondition, Signal
+from loguru import logger
 
 from scraper.alibaba1688 import Alibaba1688Scraper
 from scraper.base import Product
@@ -17,14 +18,12 @@ SCRAPER_REGISTRY = {
 
 
 class ScrapeWorker(QThread):
-    """跑抓取的后台线程，并实现 Controller 协议。"""
-
     log = Signal(str, str)
     progress = Signal(int, int, str)
     product_done = Signal(object)
     finished_ok = Signal(list)
     failed = Signal(str)
-    user_login_required = Signal(str, str)   # platform_name, message
+    user_login_required = Signal(str, str)
 
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
@@ -32,14 +31,13 @@ class ScrapeWorker(QThread):
         self._stop = False
         self._mutex = QMutex()
         self._cond = QWaitCondition()
-        self._user_response: str | None = None  # "proceed" | "cancel"
+        self._user_response: str | None = None
 
     # ============== Controller 协议 ==============
     def is_stopping(self) -> bool:
         return self._stop
 
     def request_user_login(self, platform: str, message: str) -> bool:
-        """从 scraper 线程调用。阻塞，直到 GUI 调用 proceed_login() 或 cancel_login()。"""
         self.user_login_required.emit(platform, message)
         self._mutex.lock()
         try:
@@ -83,7 +81,7 @@ class ScrapeWorker(QThread):
         results: list[Product] = []
         browser = None
         try:
-            self.log.emit("INFO", "正在启动浏览器...")
+            logger.info("正在启动浏览器（首次启动需要 5~15 秒）...")
             try:
                 browser = self._build_browser(cfg)
             except Exception as exc:
@@ -98,39 +96,31 @@ class ScrapeWorker(QThread):
                 self.failed.emit("请至少填写一个关键词或 URL。")
                 return
 
-            # ===== 第一步：为每个平台开一个独立 Tab =====
-            self.log.emit("INFO", f"打开 {len(platforms)} 个浏览器标签页（每个平台一个）...")
-            tabs: dict[str, object] = {}      # platform -> tab
-            scrapers: dict[str, object] = {}  # platform -> scraper
-
+            # 给每个平台开独立 tab（不立刻去首页，避免与 search 双重导航）
+            logger.info(f"打开 {len(platforms)} 个浏览器标签页...")
+            tabs: dict = {}
+            scrapers: dict = {}
             first_tab = browser.latest_tab
             for i, plat in enumerate(platforms):
                 cls = SCRAPER_REGISTRY.get(plat)
                 if not cls:
                     continue
-                if i == 0:
-                    tab = first_tab
-                else:
-                    tab = browser.new_tab()
+                tab = first_tab if i == 0 else browser.new_tab()
                 tabs[plat] = tab
                 scrapers[plat] = cls(browser, cfg, controller=self)
-                # 绑定 tab 到 scraper（覆盖默认 latest_tab 行为）
-                scrapers[plat]._tab = tab  # type: ignore[attr-defined]
-
-                zh = scrapers[plat]._zh_name()  # type: ignore[attr-defined]
-                self.log.emit("INFO", f"打开 {zh} 首页...")
-                try:
-                    tab.get(scrapers[plat].home_url,  # type: ignore[attr-defined]
-                            timeout=cfg["browser"].get("page_load_timeout", 30))
-                except Exception as exc:
-                    self.log.emit("WARN", f"{zh} 首页加载失败：{exc}")
-                sleep_random([0.6, 1.2])
+                scrapers[plat]._tab = tab
+                zh = scrapers[plat]._zh_name()
+                logger.info(f"  Tab {i+1}: {zh}")
 
             if self._stop:
                 self.finished_ok.emit(results); return
 
-            # ===== 第二步：并行确认登录 =====
-            self.log.emit("INFO", "请检查每个平台的登录状态。如果未登录，按对话框提示完成登录。")
+            # 总任务数（只算关键词，URL 直采单算）
+            tasks_per_plat = max(1, len(keywords))
+            total_tasks = max(1, len(platforms) * tasks_per_plat + len(platforms) * len(urls))
+            done = 0
+
+            # 直接进入抓取；search() 内部会按需触发登录对话框
             for plat in platforms:
                 if self._stop:
                     break
@@ -138,41 +128,13 @@ class ScrapeWorker(QThread):
                 tab = tabs.get(plat)
                 if not scraper or not tab:
                     continue
-                # 切到对应 tab，让用户在浏览器里也看到对应页面
+                # 切到本平台的 tab，让用户在浏览器看到对应 tab
                 try:
                     tab.set.activate()
                 except Exception:
                     pass
-                if not scraper.ensure_logged_in(tab, target_url=scraper.home_url):  # type: ignore[attr-defined]
-                    self.log.emit(
-                        "WARN",
-                        f"{scraper._zh_name()} 登录未完成或被取消，将跳过该平台。",  # type: ignore[attr-defined]
-                    )
-                    scrapers[plat] = None  # type: ignore[assignment]
 
-            if self._stop:
-                self.finished_ok.emit(results); return
-
-            # ===== 第三步：按用户的关键词抓取 =====
-            active_platforms = [p for p in platforms if scrapers.get(p)]
-            if not active_platforms:
-                self.failed.emit("没有可用的平台（全部跳过或登录失败）。")
-                return
-
-            self.log.emit("INFO", f"开始按关键词 {keywords} 抓取 {active_platforms}")
-            total_tasks = max(1, len(active_platforms) * (len(keywords) + len(urls)))
-            done = 0
-
-            for plat in active_platforms:
-                if self._stop:
-                    break
-                scraper = scrapers[plat]
-                tab = tabs[plat]
-                # 让 scraper 始终用绑定的 tab
-                # （通过 monkey-patch search/fetch_detail 内部使用的 latest_tab）
-                self._bind_tab(browser, tab)
-
-                zh = scraper._zh_name()  # type: ignore[attr-defined]
+                zh = scraper._zh_name()
 
                 # URL 直采
                 for url in urls:
@@ -181,58 +143,71 @@ class ScrapeWorker(QThread):
                     if not self._url_match(url, plat):
                         continue
                     try:
-                        prod = scraper.parse_url(url)  # type: ignore[attr-defined]
+                        prod = scraper.parse_url(url)
                         if prod:
                             classify_products([prod], cfg["type_rules"], cfg["price_buckets"])
                             results.append(prod)
                             self.product_done.emit(prod)
                     except Exception as exc:
-                        self.log.emit("WARN", f"URL 解析失败 {url}: {exc}")
+                        logger.warning(f"URL 解析失败 {url}: {exc}")
                     sleep_random(cfg["browser"]["request_interval"])
                     done += 1
                     self.progress.emit(done, total_tasks, f"[{zh}] URL")
 
-                # 关键词搜索（按用户填写的关键词逐个抓）
+                # 关键词搜索
                 for kw in keywords:
                     if self._stop:
                         break
-                    self.log.emit("INFO", f"[{zh}] 搜索关键词：{kw}")
+                    logger.info(f"========== [{zh}] 开始搜索：{kw} ==========")
                     try:
-                        products = scraper.search(  # type: ignore[attr-defined]
+                        products = scraper.search(
                             kw,
                             max_pages=cfg["max_pages"],
                             limit=cfg["per_keyword_limit"],
                         )
                     except Exception as exc:
-                        self.log.emit("ERROR", f"[{zh}] 搜索 '{kw}' 失败：{exc}")
+                        logger.exception(f"[{zh}] 搜索 '{kw}' 异常")
                         done += 1
+                        self.progress.emit(done, total_tasks, f"[{zh}] {kw} 失败")
                         continue
 
-                    self.log.emit("INFO", f"[{zh}] '{kw}' 列表抓到 {len(products)} 件，开始抓详情...")
-                    sub_total = max(1, len(products))
+                    if not products:
+                        logger.warning(
+                            f"[{zh}] 关键词 '{kw}' 没抓到列表项。"
+                            f"可能原因：1) 该平台仍未通过验证；2) 搜索结果为空；"
+                            f"3) 页面结构变化。可在浏览器对应 Tab 里手动操作排查。"
+                        )
+                        done += 1
+                        self.progress.emit(done, total_tasks, f"[{zh}] {kw} 0 件")
+                        continue
+
+                    logger.info(f"[{zh}] '{kw}' 列表 {len(products)} 件，开始抓详情...")
+                    sub_total = len(products)
                     for i, p in enumerate(products, 1):
                         if self._stop:
                             break
                         try:
-                            scraper.fetch_detail(p)  # type: ignore[attr-defined]
+                            scraper.fetch_detail(p)
                         except Exception as exc:
-                            self.log.emit("WARN", f"详情失败 {p.url}: {exc}")
+                            logger.warning(f"详情失败 {p.url}: {exc}")
                         classify_products([p], cfg["type_rules"], cfg["price_buckets"])
                         results.append(p)
                         self.product_done.emit(p)
                         self.progress.emit(
                             done, total_tasks,
-                            f"[{zh}] {kw} {i}/{sub_total}"
+                            f"[{zh}] {kw} 详情 {i}/{sub_total}",
                         )
                         sleep_random(cfg["browser"]["request_interval"])
                     done += 1
+                    self.progress.emit(done, total_tasks, f"[{zh}] {kw} 完成")
 
             if self._stop:
-                self.log.emit("WARN", "用户已中止抓取。")
-            self.log.emit("INFO", f"抓取流程结束，共 {len(results)} 件商品。")
+                logger.warning("用户已中止抓取。")
+            logger.info(f"抓取流程结束，共 {len(results)} 件商品。")
             self.finished_ok.emit(results)
         except Exception as exc:
-            self.failed.emit(f"{exc}")
+            logger.exception("Worker 异常退出")
+            self.failed.emit(str(exc))
         finally:
             if browser is not None:
                 try:
@@ -252,14 +227,6 @@ class ScrapeWorker(QThread):
         opts.set_argument("--lang=zh-CN")
         opts.set_argument("--window-size=1280,900")
         return ChromiumPage(opts)
-
-    @staticmethod
-    def _bind_tab(browser, tab) -> None:
-        """切换浏览器 latest_tab 为目标 tab（让默认调用走对的 tab）。"""
-        try:
-            tab.set.activate()
-        except Exception:
-            pass
 
     @staticmethod
     def _url_match(url: str, platform: str) -> bool:

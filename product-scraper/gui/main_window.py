@@ -36,6 +36,7 @@ from scraper.base import Product
 from scraper.classifier import classify_products
 from scraper.storage import Storage
 
+from .log_bridge import LogBridge
 from .scrape_worker import ScrapeWorker
 
 
@@ -95,6 +96,10 @@ class MainWindow(QMainWindow):
         self.cfg = self._load_cfg()
         self.products: list[Product] = []        # 全部抓到的
         self.worker: ScrapeWorker | None = None
+
+        # 把 scraper 内部的 loguru 日志全部接到 GUI 日志面板（v0.3.0 修复）
+        self._log_bridge = LogBridge.instance()
+        self._log_bridge.log.connect(self._log)
 
         self._build_ui()
 
