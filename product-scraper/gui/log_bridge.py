@@ -26,11 +26,14 @@ class LogBridge(QObject):
         super().__init__()
         # 干掉 loguru 默认 sink（输出到 stderr），换成我们的
         logger.remove()
-        # 同时保留 stderr（开发时方便），但生产 EXE 没 console 也无所谓
+        # 注意：PyInstaller windowed EXE (console=False) 下 sys.stderr 是 None，
+        # 给 loguru 加 None sink 会在每次 log 时抛 'NoneType' has no attribute 'write'。
+        # 这就是导出时报错的根因。所以先校验再加。
         try:
             import sys
-            logger.add(sys.stderr, level="INFO", colorize=True,
-                       format="{time:HH:mm:ss} | {level} | {message}")
+            if getattr(sys, "stderr", None) is not None and hasattr(sys.stderr, "write"):
+                logger.add(sys.stderr, level="INFO", colorize=True,
+                           format="{time:HH:mm:ss} | {level} | {message}")
         except Exception:
             pass
         logger.add(self._sink, level="DEBUG", format="{message}")

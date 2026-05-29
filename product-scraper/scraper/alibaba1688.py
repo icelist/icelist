@@ -1,7 +1,6 @@
-"""1688 抓取器（DOM 无关：扫描所有 <a> 用 regex 匹配商品 ID）."""
+"""1688 抓取器（DOM 无关：扫所有 a 取商品 ID，扫所有 img 取图片）."""
 from __future__ import annotations
 
-import json
 import re
 import time
 from urllib.parse import urlparse, parse_qs
@@ -9,21 +8,70 @@ from urllib.parse import urlparse, parse_qs
 from loguru import logger
 
 from .base import BaseScraper, Product
-from .utils import encode_keyword, parse_price, sleep_random
+from .utils import encode_keyword, parse_price
 
 
 SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={kw}&beginPage={page}"
 DETAIL_URL = "https://detail.1688.com/offer/{pid}.html"
 HOME_URL = "https://www.1688.com/"
 
-# 匹配多种格式的 1688 商品 ID
-# https://detail.1688.com/offer/12345.html
-# //detail.1688.com/offer/12345.html
-# /offer/12345.html
-# https://detail.m.1688.com/offer/12345.html
+# 兼容多种 href 形式
 ID_RE = re.compile(r"(?:^|//|/)(?:detail(?:\.m)?\.1688\.com)?/offer/(\d{6,})\.html")
-# 兜底：HTML 源码里 "offerId":"12345" / data-offer-id="12345"
 ID_IN_HTML_RE = re.compile(r'(?:offerId|data-offer-id)["\']?\s*[:=]\s*["\']?(\d{8,})')
+
+# 1688 / 阿里图片 CDN（涵盖几乎所有商品图）
+IMG_HOST_RE = re.compile(r"(alicdn|taobaocdn|tbcdn|aliimg|1688|gd\d+\.alicdn)", re.I)
+# 从 HTML 源码里直接抓阿里图片 URL
+IMG_URL_IN_HTML_RE = re.compile(
+    r'(?:https?:)?//[^"\'\s<>]*?(?:alicdn|aliimg|tbcdn|taobaocdn)[^"\'\s<>]*?\.(?:jpg|jpeg|png|webp|gif)',
+    re.I,
+)
+# 形如 .summ. / _100x100. / _220x220q90.jpg 的缩略图标记
+THUMB_SIZE_RE = re.compile(r"(_\d+x\d+(?:q\d+)?|\.summ)\.")
+
+
+def _normalize_img_url(url: str) -> str:
+    """补协议、去缩略图后缀。"""
+    if not url:
+        return url
+    if url.startswith("//"):
+        url = "https:" + url
+    url = THUMB_SIZE_RE.sub(".", url)
+    return url
+
+
+def _is_alicdn_image(url: str) -> bool:
+    if not url or not url.startswith(("http", "//")):
+        return False
+    if not IMG_HOST_RE.search(url):
+        return False
+    # 排除 logo、icon 之类的小图
+    lower = url.lower()
+    if any(s in lower for s in ("logo", "icon", "avatar", "1x1", "spacer")):
+        return False
+    return True
+
+
+def _img_attrs(img_el) -> list[str]:
+    """从 <img> 上读所有可能的图片地址属性（懒加载常用 data-*）。"""
+    out = []
+    for attr in ("src", "data-src", "data-original", "data-lazy-src", "data-ks-lazyload",
+                 "data-image", "data-srcset", "srcset"):
+        try:
+            v = img_el.attr(attr)
+        except Exception:
+            continue
+        if not v:
+            continue
+        # srcset 形如 "url1 1x, url2 2x"
+        if " " in v and "," in v:
+            for part in v.split(","):
+                u = part.strip().split(" ")[0]
+                if u:
+                    out.append(u)
+        else:
+            out.append(v)
+    return out
 
 
 class Alibaba1688Scraper(BaseScraper):
@@ -47,7 +95,6 @@ class Alibaba1688Scraper(BaseScraper):
                 logger.warning(f"[1688] 搜索页加载失败：{exc}")
                 continue
 
-            # 给 JS 一点时间渲染 + 滚动触发懒加载
             time.sleep(2.0)
             for _ in range(3):
                 try:
@@ -60,33 +107,26 @@ class Alibaba1688Scraper(BaseScraper):
             except Exception:
                 pass
 
-            # 检查登录/验证状态
             if not self.ensure_logged_in(page, target_url=url, timeout_each_load=timeout):
                 logger.warning("[1688] 用户取消或未通过登录，跳过该关键词。")
                 break
 
-            # ===== 多策略抓商品 ID =====
             try:
                 logger.info(f"[1688] 当前页：{page.url}")
                 logger.info(f"[1688] 页面标题：{page.title}")
             except Exception:
                 pass
 
-            offer_map: dict[str, dict] = self._extract_offers(page)
-            logger.info(f"[1688] 第 {page_no} 页提取到 {len(offer_map)} 个商品")
+            offer_map = self._extract_offers(page)
+            n_with_img = sum(1 for v in offer_map.values() if v.get("images"))
+            logger.info(f"[1688] 第 {page_no} 页提取到 {len(offer_map)} 个商品，其中 {n_with_img} 个带图")
 
             if not offer_map:
-                # dump 一段 HTML 帮助定位（前 2000 字符）
                 try:
-                    html = (page.html or "")[:2000]
-                    logger.warning(f"[1688] 0 件！页面 HTML 片段：{html[:1500]}")
+                    html = (page.html or "")[:1500]
+                    logger.warning(f"[1688] 0 件！页面 HTML 片段：{html}")
                 except Exception:
                     pass
-                logger.warning(
-                    "[1688] 没找到商品。可能原因："
-                    "1) 还没在 Tab 里登录；2) 1688 改了页面结构；"
-                    "3) 风控页伪装成搜索页。请在浏览器 1688 Tab 手动确认能看到商品列表。"
-                )
                 continue
 
             for pid, info in offer_map.items():
@@ -100,6 +140,7 @@ class Alibaba1688Scraper(BaseScraper):
                     keyword=keyword,
                     price=info.get("price"),
                     price_text=info.get("price_text"),
+                    images=info.get("images") or [],
                 )
                 if len(collected) >= limit:
                     break
@@ -110,14 +151,9 @@ class Alibaba1688Scraper(BaseScraper):
         return list(collected.values())[:limit]
 
     def _extract_offers(self, page) -> dict[str, dict]:
-        """
-        多策略提取商品。返回 {offer_id: {title, url, price, price_text}}。
-        策略 1：扫描所有 <a> 标签的 href，regex 匹配 offer ID
-        策略 2：扫描页面 HTML 源码，regex 匹配 offerId / data-offer-id
-        """
         result: dict[str, dict] = {}
 
-        # --- 策略 1：扫所有 <a> ---
+        # 策略 1：扫所有 <a>
         try:
             anchors = page.eles("css:a")
         except Exception:
@@ -127,14 +163,14 @@ class Alibaba1688Scraper(BaseScraper):
                 href = a.attr("href") or ""
             except Exception:
                 continue
-            if not href:
-                continue
             m = ID_RE.search(href)
             if not m:
                 continue
             pid = m.group(1)
             if pid in result:
                 continue
+
+            # 标题
             try:
                 title = (a.attr("title") or a.text or "").strip()
                 if not title:
@@ -142,27 +178,43 @@ class Alibaba1688Scraper(BaseScraper):
                     title = (img.attr("alt") if img else "") or ""
             except Exception:
                 title = ""
-            # 试着在父元素里找价格
+
+            # 价格 + 图片：在卡片容器里找
+            container = a
+            try:
+                p = a.parent()
+                if p:
+                    container = p
+                    p2 = p.parent()
+                    if p2:
+                        container = p2  # 再往上一层抓得更全
+            except Exception:
+                pass
+
             price_text, price = None, None
             try:
-                container = a.parent() or a
                 price_el = container.ele("css:[class*='price'], [class*='Price']", timeout=0.3)
                 if price_el:
                     price_text = price_el.text.strip()
                     price = parse_price(price_text)
             except Exception:
                 pass
+
+            # 图片：扫卡片里所有 <img>
+            imgs = self._collect_images_in(container, max_n=3)
+
             result[pid] = {
                 "title": title,
                 "url": href if href.startswith("http") else DETAIL_URL.format(pid=pid),
                 "price": price,
                 "price_text": price_text,
+                "images": imgs,
             }
 
         if result:
             return result
 
-        # --- 策略 2：从源码中正则 ---
+        # 策略 2：HTML 源码 regex
         try:
             html = page.html or ""
         except Exception:
@@ -172,12 +224,28 @@ class Alibaba1688Scraper(BaseScraper):
             if pid in result:
                 continue
             result[pid] = {
-                "title": "",
-                "url": DETAIL_URL.format(pid=pid),
-                "price": None,
-                "price_text": None,
+                "title": "", "url": DETAIL_URL.format(pid=pid),
+                "price": None, "price_text": None, "images": [],
             }
         return result
+
+    @staticmethod
+    def _collect_images_in(container, max_n: int = 5) -> list[str]:
+        out: list[str] = []
+        try:
+            imgs = container.eles("css:img")
+        except Exception:
+            imgs = []
+        for img_el in imgs:
+            for u in _img_attrs(img_el):
+                if _is_alicdn_image(u):
+                    nu = _normalize_img_url(u)
+                    if nu and nu not in out:
+                        out.append(nu)
+                        break
+            if len(out) >= max_n:
+                break
+        return out
 
     # ---------------- 详情 ----------------
     def fetch_detail(self, product: Product) -> Product:
@@ -190,15 +258,29 @@ class Alibaba1688Scraper(BaseScraper):
             return product
         time.sleep(1.5)
 
+        # 滚动让懒加载图出来
+        for _ in range(2):
+            try:
+                page.scroll.to_bottom()
+            except Exception:
+                pass
+            time.sleep(0.6)
+        try:
+            page.scroll.to_top()
+        except Exception:
+            pass
+
         if not self.ensure_logged_in(page, target_url=product.url, timeout_each_load=timeout):
             return product
 
+        # 标题
         title_el = page.ele("css:h1", timeout=2) or page.ele(
             "css:.d-title, .title-text, .od-pc-offer-title", timeout=2
         )
         if title_el and title_el.text.strip():
             product.title = title_el.text.strip()
 
+        # 价格
         price_el = page.ele(
             "css:.price, .mod-detail-price, [class*='price']", timeout=2
         )
@@ -206,19 +288,42 @@ class Alibaba1688Scraper(BaseScraper):
             product.price_text = price_el.text.strip().replace("\n", " ")
             product.price = parse_price(product.price_text)
 
-        imgs: list[str] = []
-        for img in page.eles("css:.detail-gallery img, .od-pc-gallery img, .img-list img"):
-            src = img.attr("src") or img.attr("data-src") or ""
-            if src and "http" in src:
-                src = re.sub(r"_\d+x\d+\.", ".", src)
-                if src not in imgs:
-                    imgs.append(src)
-            if len(imgs) >= 10:
-                break
-        product.images = imgs
+        # ===== 图片：DOM 无关三层兜底 =====
+        imgs: list[str] = list(product.images)  # 保留搜索页已抓到的
 
+        # 1) 扫所有 <img>
+        try:
+            for img in page.eles("css:img"):
+                for u in _img_attrs(img):
+                    if _is_alicdn_image(u):
+                        nu = _normalize_img_url(u)
+                        if nu not in imgs:
+                            imgs.append(nu)
+                        break
+                if len(imgs) >= 10:
+                    break
+        except Exception:
+            pass
+
+        # 2) 从 HTML 源码 regex 抓
+        if len(imgs) < 5:
+            try:
+                html = page.html or ""
+            except Exception:
+                html = ""
+            for m in IMG_URL_IN_HTML_RE.finditer(html):
+                u = m.group(0)
+                nu = _normalize_img_url(u)
+                if _is_alicdn_image(nu) and nu not in imgs:
+                    imgs.append(nu)
+                if len(imgs) >= 15:
+                    break
+
+        product.images = imgs[:10]
+
+        # 规格
         specs: dict[str, str] = {}
-        for row in page.eles("css:.offer-attr-list li, .od-pc-attribute li, .obj-content li"):
+        for row in page.eles("css:.offer-attr-list li, .od-pc-attribute li, .obj-content li, [class*='attribute'] li"):
             text = row.text.strip()
             sep = ":" if ":" in text else ("：" if "：" in text else None)
             if sep:
@@ -226,8 +331,9 @@ class Alibaba1688Scraper(BaseScraper):
                 specs[k.strip()] = v.strip()
         product.specs = specs
 
+        # 卖点
         features: list[str] = []
-        for el in page.eles("css:.mod-detail-features li, .feature-list li, .selling-point li"):
+        for el in page.eles("css:.mod-detail-features li, .feature-list li, .selling-point li, [class*='feature'] li"):
             t = el.text.strip()
             if t:
                 features.append(t)
@@ -235,11 +341,11 @@ class Alibaba1688Scraper(BaseScraper):
             features = [f"{k}: {v}" for k, v in list(specs.items())[:5]]
         product.features = features
 
-        crumbs = [c.text.strip() for c in page.eles("css:.breadcrumb a, .crumb a") if c.text.strip()]
+        crumbs = [c.text.strip() for c in page.eles("css:.breadcrumb a, .crumb a, [class*='breadcrumb'] a") if c.text.strip()]
         if crumbs:
             product.category_path = " > ".join(crumbs)
 
-        shop_el = page.ele("css:.shop-name, .company-name, .od-pc-shop-name", timeout=1)
+        shop_el = page.ele("css:.shop-name, .company-name, .od-pc-shop-name, [class*='shop-name']", timeout=1)
         if shop_el:
             product.shop = shop_el.text.strip()
 
@@ -254,10 +360,7 @@ class Alibaba1688Scraper(BaseScraper):
             pid = qs.get("offerId", [None])[0]
             if not pid:
                 return None
-        prod = Product(
-            platform=self.name,
-            product_id=pid,
-            title="",
+        return self.fetch_detail(Product(
+            platform=self.name, product_id=pid, title="",
             url=DETAIL_URL.format(pid=pid),
-        )
-        return self.fetch_detail(prod)
+        ))

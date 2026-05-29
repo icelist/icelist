@@ -20,6 +20,50 @@ ID_RE = re.compile(r"goods_id=(\d+)")
 ID_IN_HTML_RE = re.compile(r'(?:goodsId|goods_id)["\']?\s*[:=]\s*["\']?(\d{6,})')
 RAW_DATA_RE = re.compile(r"window\.rawData\s*=\s*(\{.+?\});", re.S)
 
+# PDD 图片 CDN
+PDD_IMG_HOST_RE = re.compile(r"(pddpic|pdd|yangkeduo|pinduoduo)", re.I)
+PDD_IMG_URL_IN_HTML_RE = re.compile(
+    r'(?:https?:)?//[^"\'\s<>]*?(?:pddpic|yangkeduo|pinduoduo)[^"\'\s<>]*?\.(?:jpg|jpeg|png|webp|gif)',
+    re.I,
+)
+
+
+def _is_pdd_image(url: str) -> bool:
+    if not url or not url.startswith(("http", "//")):
+        return False
+    if not PDD_IMG_HOST_RE.search(url):
+        return False
+    lower = url.lower()
+    if any(s in lower for s in ("logo", "icon", "avatar", "1x1")):
+        return False
+    return True
+
+
+def _norm_pdd_url(url: str) -> str:
+    if url.startswith("//"):
+        url = "https:" + url
+    return url
+
+
+def _img_attrs(img_el) -> list[str]:
+    out = []
+    for attr in ("src", "data-src", "data-original", "data-lazy-src",
+                 "data-image", "data-srcset", "srcset"):
+        try:
+            v = img_el.attr(attr)
+        except Exception:
+            continue
+        if not v:
+            continue
+        if " " in v and "," in v:
+            for part in v.split(","):
+                u = part.strip().split(" ")[0]
+                if u:
+                    out.append(u)
+        else:
+            out.append(v)
+    return out
+
 
 class PinduoduoScraper(BaseScraper):
     name = "pinduoduo"
@@ -111,6 +155,7 @@ class PinduoduoScraper(BaseScraper):
                     continue
                 title = ""
                 price_text, price = None, None
+                imgs: list[str] = []
                 if a is not None:
                     try:
                         title = (a.attr("title") or "").strip()
@@ -121,6 +166,23 @@ class PinduoduoScraper(BaseScraper):
                         if price_el:
                             price_text = price_el.text.strip()
                             price = parse_price(price_text)
+                        # 图片：在 a + 父容器里扫
+                        container = a
+                        try:
+                            p = a.parent()
+                            if p:
+                                container = p
+                        except Exception:
+                            pass
+                        for img_el in container.eles("css:img"):
+                            for u in _img_attrs(img_el):
+                                if _is_pdd_image(u):
+                                    nu = _norm_pdd_url(u)
+                                    if nu not in imgs:
+                                        imgs.append(nu)
+                                    break
+                            if len(imgs) >= 3:
+                                break
                     except Exception:
                         pass
 
@@ -132,6 +194,7 @@ class PinduoduoScraper(BaseScraper):
                     keyword=keyword,
                     price=price,
                     price_text=price_text,
+                    images=imgs,
                 )
                 if len(collected) >= limit:
                     break
@@ -265,11 +328,31 @@ class PinduoduoScraper(BaseScraper):
         if price_el:
             product.price_text = price_el.text.strip().replace("\n", " ")
             product.price = parse_price(product.price_text)
-        imgs = []
-        for img in page.eles("css:img"):
-            src = img.attr("src") or img.attr("data-src") or ""
-            if "pdd" in src and src.startswith("http") and src not in imgs:
-                imgs.append(src)
-            if len(imgs) >= 10:
-                break
-        product.images = imgs
+
+        # 图片 - DOM 无关多层兜底
+        imgs: list[str] = list(product.images)
+        try:
+            for img in page.eles("css:img"):
+                for u in _img_attrs(img):
+                    if _is_pdd_image(u):
+                        nu = _norm_pdd_url(u)
+                        if nu not in imgs:
+                            imgs.append(nu)
+                        break
+                if len(imgs) >= 10:
+                    break
+        except Exception:
+            pass
+        # HTML regex 兜底
+        if len(imgs) < 3:
+            try:
+                html = page.html or ""
+            except Exception:
+                html = ""
+            for m in PDD_IMG_URL_IN_HTML_RE.finditer(html):
+                u = _norm_pdd_url(m.group(0))
+                if u not in imgs:
+                    imgs.append(u)
+                if len(imgs) >= 15:
+                    break
+        product.images = imgs[:10]
