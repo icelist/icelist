@@ -291,10 +291,22 @@ class PinduoduoScraper(BaseScraper):
                     spec_dict[str(k)] = str(vals or "")
         product.specs = spec_dict
 
+        # 从 spec dict 抽常用字段
+        for k, v in spec_dict.items():
+            if k == "品牌": product.brand = v
+            elif k == "产地": product.origin = v
+            elif k == "材质": product.material = v
+
         features = goods.get("goodsDesc") or goods.get("sellingPoint") or []
         if isinstance(features, str):
             features = [features]
         product.features = [f for f in features if f][:10]
+
+        # 描述
+        desc = goods.get("goodsDesc") or goods.get("description") or ""
+        if isinstance(desc, list):
+            desc = "\n".join(str(d) for d in desc)
+        product.description = str(desc)[:3000]
 
         cat = goods.get("catName") or goods.get("category")
         if cat:

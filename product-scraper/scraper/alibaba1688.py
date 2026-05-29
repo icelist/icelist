@@ -323,13 +323,37 @@ class Alibaba1688Scraper(BaseScraper):
 
         # 规格
         specs: dict[str, str] = {}
-        for row in page.eles("css:.offer-attr-list li, .od-pc-attribute li, .obj-content li, [class*='attribute'] li"):
+        for row in page.eles("css:.offer-attr-list li, .od-pc-attribute li, .obj-content li, [class*='attribute'] li, [class*='property'] li, dl dt, dl dd, table tr"):
             text = row.text.strip()
             sep = ":" if ":" in text else ("：" if "：" in text else None)
             if sep:
                 k, _, v = text.partition(sep)
-                specs[k.strip()] = v.strip()
+                k, v = k.strip(), v.strip()
+                if k and v and len(k) < 30 and len(v) < 200:
+                    specs[k] = v
         product.specs = specs
+
+        # 从 specs 抽常用字段
+        for key in ("品牌", "产地", "材质", "起订量", "MOQ", "发货期"):
+            if key in specs:
+                if key == "品牌": product.brand = specs[key]
+                elif key == "产地": product.origin = specs[key]
+                elif key == "材质": product.material = specs[key]
+                elif key in ("起订量", "MOQ"): product.moq = specs[key]
+                elif key == "发货期": product.delivery = specs[key]
+
+        # 描述：抓详情页正文（限 3000 字）
+        desc_parts: list[str] = []
+        for el in page.eles("css:#desc-content, .detail-content, [class*='desc-content'], [class*='description'], .od-pc-detail-content"):
+            try:
+                t = el.text.strip()
+            except Exception:
+                t = ""
+            if t and t not in desc_parts:
+                desc_parts.append(t)
+            if sum(len(x) for x in desc_parts) > 3000:
+                break
+        product.description = "\n".join(desc_parts)[:3000]
 
         # 卖点
         features: list[str] = []

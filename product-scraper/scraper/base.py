@@ -31,6 +31,13 @@ class Product:
     keyword: str | None = None
     bucket_type: str | None = None
     bucket_price: str | None = None
+    # v1.2 详细字段
+    description: str = ""
+    brand: str | None = None
+    moq: str | None = None
+    delivery: str | None = None
+    origin: str | None = None
+    material: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
