@@ -1,4 +1,4 @@
-"""通用工具函数."""
+"""通用工具函数（含图片下载、防盗链 Referer、价格解析）."""
 from __future__ import annotations
 
 import hashlib
@@ -18,9 +18,7 @@ PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
 
 def encode_keyword(keyword: str, encoding: str = "utf-8") -> str:
-    """把关键词按指定编码 percent-encode。
-    1688 历史上用 GBK，PDD 用 UTF-8。给错编码会导致网站搜索栏显示乱码。
-    """
+    """关键词按指定编码 percent-encode。1688=GBK, PDD=UTF-8。"""
     if not keyword:
         return ""
     try:
@@ -30,14 +28,12 @@ def encode_keyword(keyword: str, encoding: str = "utf-8") -> str:
 
 
 def parse_price(text: str | None) -> float | None:
-    """从形如 '￥12.50' / '12.5-39.9 元' / '￥12.50起' 中解析最低价。"""
     if not text:
         return None
     matches = PRICE_RE.findall(text)
     if not matches:
         return None
     try:
-        # 区间价取最小值
         return min(float(m) for m in matches)
     except ValueError:
         return None
@@ -54,15 +50,26 @@ def safe_filename(name: str, max_len: int = 80) -> str:
 
 
 def md5(text: str) -> str:
-    # FIPS 模式下 hashlib.md5 默认会拒绝；指定 usedforsecurity=False
     try:
         return hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
     except TypeError:
         return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
+def _referer_for(url: str) -> str | None:
+    """alicdn / pddpic 都有防盗链；没 Referer 直接 403。"""
+    if not url:
+        return None
+    u = url.lower()
+    if any(d in u for d in ("alicdn", "aliimg", "taobaocdn", "tbcdn", "1688")):
+        return "https://www.1688.com/"
+    if any(d in u for d in ("pddpic", "yangkeduo", "pinduoduo")):
+        return "https://mobile.yangkeduo.com/"
+    return None
+
+
 def download_image(url: str, save_dir: Path, prefix: str = "") -> str | None:
-    """下载图片，返回本地相对路径。失败返回 None。"""
+    """下载图片，返回本地路径。失败返回 None。"""
     if not url:
         return None
     if url.startswith("//"):
@@ -75,24 +82,29 @@ def download_image(url: str, save_dir: Path, prefix: str = "") -> str | None:
 
     fname = f"{safe_filename(prefix)}_{md5(url)[:10]}{ext}"
     fpath = save_dir / fname
-    if fpath.exists():
+    if fpath.exists() and fpath.stat().st_size > 100:
         return str(fpath)
 
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "image/webp,image/jpeg,image/png,image/*,*/*;q=0.8",
+    }
+    ref = _referer_for(url)
+    if ref:
+        headers["Referer"] = ref
+
     try:
-        resp = requests.get(
-            url,
-            timeout=15,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0 Safari/537.36"
-                )
-            },
-        )
+        resp = requests.get(url, timeout=15, headers=headers)
         resp.raise_for_status()
+        if len(resp.content) < 100:
+            logger.warning(f"下载得到的字节太少疑似占位图 {url}: {len(resp.content)}B")
+            return None
         fpath.write_bytes(resp.content)
         return str(fpath)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(f"下载图片失败 {url}: {exc}")
         return None
