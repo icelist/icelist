@@ -18,6 +18,10 @@ defaults:
   run:
     working-directory: product-scraper
 
+# 让 GITHUB_TOKEN 有权限创建 Release / 上传 assets
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build Windows EXE
