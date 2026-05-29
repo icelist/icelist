@@ -366,6 +366,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self._log("INFO", "开始抓取 ...")
+        self._log("INFO", "提示：浏览器会先打开各平台首页确认登录。如果跳出登录页，请在弹出的浏览器窗口中扫码 / 登录后，回到本程序点对话框里的【已完成】。")
 
         self.worker = ScrapeWorker(cfg)
         self.worker.log.connect(self._log)
@@ -373,7 +374,29 @@ class MainWindow(QMainWindow):
         self.worker.product_done.connect(self._on_product_done)
         self.worker.finished_ok.connect(self._on_worker_finished)
         self.worker.failed.connect(self._on_worker_failed)
+        self.worker.user_login_required.connect(self._on_user_login_required)
         self.worker.start()
+
+    def _on_user_login_required(self, platform: str, message: str) -> None:
+        """worker 检测到登录页 → 弹模态对话框，等用户点【已完成】或【取消】。"""
+        zh = {"alibaba1688": "1688", "pinduoduo": "拼多多"}.get(platform, platform)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(f"需要登录 - {zh}")
+        box.setText(message)
+        btn_done = box.addButton("✅ 已完成，继续抓取", QMessageBox.AcceptRole)
+        btn_cancel = box.addButton("❌ 取消，跳过该平台", QMessageBox.RejectRole)
+        box.setDefaultButton(btn_done)
+        box.exec()
+
+        if not self.worker:
+            return
+        if box.clickedButton() is btn_done:
+            self._log("INFO", f"[{zh}] 用户确认登录完成，继续抓取。")
+            self.worker.proceed_login()
+        else:
+            self._log("WARN", f"[{zh}] 用户取消登录。")
+            self.worker.cancel_login()
 
     def _on_stop(self) -> None:
         if self.worker:
