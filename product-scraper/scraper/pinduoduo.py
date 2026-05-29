@@ -17,6 +17,7 @@ DETAIL_URL = "https://mobile.yangkeduo.com/goods.html?goods_id={pid}"
 HOME_URL = "https://mobile.yangkeduo.com/"
 
 ID_RE = re.compile(r"goods_id=(\d+)")
+ID_IN_HTML_RE = re.compile(r'(?:goodsId|goods_id)["\']?\s*[:=]\s*["\']?(\d{6,})')
 RAW_DATA_RE = re.compile(r"window\.rawData\s*=\s*(\{.+?\});", re.S)
 
 
@@ -63,42 +64,65 @@ class PinduoduoScraper(BaseScraper):
                     pass
                 sleep_random([0.6, 1.2])
 
-            anchors = page.eles("css:a[href*='goods.html?goods_id=']")
+            anchors = page.eles("css:a")  # 扫描所有 a 标签，靠 href regex 过滤
             try:
                 logger.info(f"[PDD] 当前页：{page.url}")
                 logger.info(f"[PDD] 页面标题：{page.title}")
             except Exception:
                 pass
-            logger.info(f"[PDD] 第 {page_no} 页找到 {len(anchors)} 个商品卡片")
 
-            if not anchors:
+            # 先按 href 抽商品 ID
+            id_to_anchor: dict[str, object] = {}
+            for a in anchors:
+                try:
+                    href = a.attr("href") or ""
+                except Exception:
+                    continue
+                m = ID_RE.search(href)
+                if m and m.group(1) not in id_to_anchor:
+                    id_to_anchor[m.group(1)] = a
+
+            # 兜底：从 HTML 源码里抽
+            if not id_to_anchor:
+                try:
+                    html = page.html or ""
+                except Exception:
+                    html = ""
+                for m in ID_IN_HTML_RE.finditer(html):
+                    pid = m.group(1)
+                    id_to_anchor.setdefault(pid, None)
+
+            logger.info(f"[PDD] 第 {page_no} 页提取到 {len(id_to_anchor)} 个商品")
+
+            if not id_to_anchor:
+                try:
+                    snippet = (page.html or "")[:1500]
+                    logger.warning(f"[PDD] 0 件！页面片段：{snippet}")
+                except Exception:
+                    pass
                 logger.warning(
-                    "[PDD] 没找到商品卡片。可能原因："
-                    "1) 你还没在 PDD Tab 登录；"
-                    "2) PDD 反爬触发；"
-                    "3) 搜索结果为空。"
-                    "请在 PDD Tab 手动确认能看到商品列表，再点【已完成】重试。"
+                    "[PDD] 没找到商品。可能原因：1) 未登录；2) PDD 反爬；3) 搜索结果空。"
+                    "请在 PDD Tab 手动确认能看到商品列表。"
                 )
                 continue
 
-            for a in anchors:
-                href = a.attr("href") or ""
-                m = ID_RE.search(href)
-                if not m:
-                    continue
-                pid = m.group(1)
+            for pid, a in id_to_anchor.items():
                 if pid in collected:
                     continue
-                title = (a.attr("title") or "").strip()
-                if not title:
-                    title_el = a.ele("css:.goods-name, .name, [class*='title']", timeout=0.3)
-                    title = title_el.text.strip() if title_el else a.text.strip().split("\n")[0]
-
+                title = ""
                 price_text, price = None, None
-                price_el = a.ele("css:[class*='price']", timeout=0.3)
-                if price_el:
-                    price_text = price_el.text.strip()
-                    price = parse_price(price_text)
+                if a is not None:
+                    try:
+                        title = (a.attr("title") or "").strip()
+                        if not title:
+                            title_el = a.ele("css:.goods-name, .name, [class*='title']", timeout=0.3)
+                            title = title_el.text.strip() if title_el else a.text.strip().split("\n")[0]
+                        price_el = a.ele("css:[class*='price']", timeout=0.3)
+                        if price_el:
+                            price_text = price_el.text.strip()
+                            price = parse_price(price_text)
+                    except Exception:
+                        pass
 
                 collected[pid] = Product(
                     platform=self.name,

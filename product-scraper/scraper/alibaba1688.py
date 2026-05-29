@@ -1,6 +1,7 @@
-"""1688 抓取器（更鲁棒：等待加载、详细日志、多套选择器）."""
+"""1688 抓取器（DOM 无关：扫描所有 <a> 用 regex 匹配商品 ID）."""
 from __future__ import annotations
 
+import json
 import re
 import time
 from urllib.parse import urlparse, parse_qs
@@ -15,15 +16,14 @@ SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={kw}&beginP
 DETAIL_URL = "https://detail.1688.com/offer/{pid}.html"
 HOME_URL = "https://www.1688.com/"
 
-ID_RE = re.compile(r"/offer/(\d+)\.html")
-
-# 多套搜索结果卡片选择器（1688 经常改 DOM）
-CARD_SELECTORS = [
-    "css:a[href*='detail.1688.com/offer/']",
-    "css:a[href*='1688.com/offer/']",
-    "css:a.offer-link",
-    "css:a[data-offer-id]",
-]
+# 匹配多种格式的 1688 商品 ID
+# https://detail.1688.com/offer/12345.html
+# //detail.1688.com/offer/12345.html
+# /offer/12345.html
+# https://detail.m.1688.com/offer/12345.html
+ID_RE = re.compile(r"(?:^|//|/)(?:detail(?:\.m)?\.1688\.com)?/offer/(\d{6,})\.html")
+# 兜底：HTML 源码里 "offerId":"12345" / data-offer-id="12345"
+ID_IN_HTML_RE = re.compile(r'(?:offerId|data-offer-id)["\']?\s*[:=]\s*["\']?(\d{8,})')
 
 
 class Alibaba1688Scraper(BaseScraper):
@@ -47,61 +47,59 @@ class Alibaba1688Scraper(BaseScraper):
                 logger.warning(f"[1688] 搜索页加载失败：{exc}")
                 continue
 
-            # 给 JS 一点时间渲染
+            # 给 JS 一点时间渲染 + 滚动触发懒加载
             time.sleep(2.0)
+            for _ in range(3):
+                try:
+                    page.scroll.to_bottom()
+                except Exception:
+                    pass
+                time.sleep(0.8)
+            try:
+                page.scroll.to_top()
+            except Exception:
+                pass
 
             # 检查登录/验证状态
             if not self.ensure_logged_in(page, target_url=url, timeout_each_load=timeout):
                 logger.warning("[1688] 用户取消或未通过登录，跳过该关键词。")
                 break
 
-            # 等卡片元素出现（最多 8 秒），并尝试多个选择器
-            cards = self._wait_for_cards(page, timeout_sec=8)
+            # ===== 多策略抓商品 ID =====
             try:
                 logger.info(f"[1688] 当前页：{page.url}")
                 logger.info(f"[1688] 页面标题：{page.title}")
             except Exception:
                 pass
-            logger.info(f"[1688] 第 {page_no} 页找到 {len(cards)} 个商品卡片")
 
-            if not cards:
-                # 滚一下再试
+            offer_map: dict[str, dict] = self._extract_offers(page)
+            logger.info(f"[1688] 第 {page_no} 页提取到 {len(offer_map)} 个商品")
+
+            if not offer_map:
+                # dump 一段 HTML 帮助定位（前 2000 字符）
                 try:
-                    page.scroll.to_bottom(); time.sleep(1.5)
-                    page.scroll.to_top()
+                    html = (page.html or "")[:2000]
+                    logger.warning(f"[1688] 0 件！页面 HTML 片段：{html[:1500]}")
                 except Exception:
                     pass
-                cards = self._wait_for_cards(page, timeout_sec=4)
-                logger.info(f"[1688] 滚动后再找：{len(cards)} 个")
-
-            if not cards:
                 logger.warning(
-                    "[1688] 仍未找到商品卡片。可能原因："
-                    "1) 你还没在 Tab 里登录 1688；"
-                    "2) 搜索词被限制；"
-                    "3) 1688 页面结构最近变化。"
-                    "建议：在 1688 Tab 里手动确认能看到搜索结果，再点【已完成】。"
+                    "[1688] 没找到商品。可能原因："
+                    "1) 还没在 Tab 里登录；2) 1688 改了页面结构；"
+                    "3) 风控页伪装成搜索页。请在浏览器 1688 Tab 手动确认能看到商品列表。"
                 )
                 continue
 
-            for a in cards:
-                href = a.attr("href") or ""
-                m = ID_RE.search(href)
-                if not m:
-                    continue
-                pid = m.group(1)
+            for pid, info in offer_map.items():
                 if pid in collected:
                     continue
-                title = (a.attr("title") or a.text or "").strip()
-                if not title:
-                    img = a.ele("css:img", timeout=0.5)
-                    title = (img.attr("alt") if img else "") or ""
                 collected[pid] = Product(
                     platform=self.name,
                     product_id=pid,
-                    title=title.strip(),
-                    url=DETAIL_URL.format(pid=pid),
+                    title=info.get("title", "").strip(),
+                    url=info.get("url") or DETAIL_URL.format(pid=pid),
                     keyword=keyword,
+                    price=info.get("price"),
+                    price_text=info.get("price_text"),
                 )
                 if len(collected) >= limit:
                     break
@@ -111,18 +109,75 @@ class Alibaba1688Scraper(BaseScraper):
         logger.info(f"[1688] 关键词 '{keyword}' 共采集 {len(collected)} 条")
         return list(collected.values())[:limit]
 
-    def _wait_for_cards(self, page, timeout_sec: float = 8.0) -> list:
-        end = time.time() + timeout_sec
-        while time.time() < end:
-            for sel in CARD_SELECTORS:
-                try:
-                    items = page.eles(sel)
-                except Exception:
-                    items = []
-                if items:
-                    return items
-            time.sleep(0.5)
-        return []
+    def _extract_offers(self, page) -> dict[str, dict]:
+        """
+        多策略提取商品。返回 {offer_id: {title, url, price, price_text}}。
+        策略 1：扫描所有 <a> 标签的 href，regex 匹配 offer ID
+        策略 2：扫描页面 HTML 源码，regex 匹配 offerId / data-offer-id
+        """
+        result: dict[str, dict] = {}
+
+        # --- 策略 1：扫所有 <a> ---
+        try:
+            anchors = page.eles("css:a")
+        except Exception:
+            anchors = []
+        for a in anchors:
+            try:
+                href = a.attr("href") or ""
+            except Exception:
+                continue
+            if not href:
+                continue
+            m = ID_RE.search(href)
+            if not m:
+                continue
+            pid = m.group(1)
+            if pid in result:
+                continue
+            try:
+                title = (a.attr("title") or a.text or "").strip()
+                if not title:
+                    img = a.ele("css:img", timeout=0.3)
+                    title = (img.attr("alt") if img else "") or ""
+            except Exception:
+                title = ""
+            # 试着在父元素里找价格
+            price_text, price = None, None
+            try:
+                container = a.parent() or a
+                price_el = container.ele("css:[class*='price'], [class*='Price']", timeout=0.3)
+                if price_el:
+                    price_text = price_el.text.strip()
+                    price = parse_price(price_text)
+            except Exception:
+                pass
+            result[pid] = {
+                "title": title,
+                "url": href if href.startswith("http") else DETAIL_URL.format(pid=pid),
+                "price": price,
+                "price_text": price_text,
+            }
+
+        if result:
+            return result
+
+        # --- 策略 2：从源码中正则 ---
+        try:
+            html = page.html or ""
+        except Exception:
+            html = ""
+        for m in ID_IN_HTML_RE.finditer(html):
+            pid = m.group(1)
+            if pid in result:
+                continue
+            result[pid] = {
+                "title": "",
+                "url": DETAIL_URL.format(pid=pid),
+                "price": None,
+                "price_text": None,
+            }
+        return result
 
     # ---------------- 详情 ----------------
     def fetch_detail(self, product: Product) -> Product:
