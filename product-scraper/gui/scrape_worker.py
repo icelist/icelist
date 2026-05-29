@@ -166,7 +166,7 @@ class ScrapeWorker(QThread):
                             limit=cfg["per_keyword_limit"],
                         )
                     except Exception as exc:
-                        logger.exception(f"[{zh}] 搜索 '{kw}' 异常")
+                        logger.error(f"[{zh}] 搜索 '{kw}' 异常：{exc}")
                         done += 1
                         self.progress.emit(done, total_tasks, f"[{zh}] {kw} 失败")
                         continue
@@ -206,7 +206,7 @@ class ScrapeWorker(QThread):
             logger.info(f"抓取流程结束，共 {len(results)} 件商品。")
             self.finished_ok.emit(results)
         except Exception as exc:
-            logger.exception("Worker 异常退出")
+            logger.error(f"Worker 异常退出：{exc}")
             self.failed.emit(str(exc))
         finally:
             if browser is not None:

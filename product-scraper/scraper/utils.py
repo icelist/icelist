@@ -54,7 +54,11 @@ def safe_filename(name: str, max_len: int = 80) -> str:
 
 
 def md5(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    # FIPS 模式下 hashlib.md5 默认会拒绝；指定 usedforsecurity=False
+    try:
+        return hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+    except TypeError:
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
 def download_image(url: str, save_dir: Path, prefix: str = "") -> str | None:

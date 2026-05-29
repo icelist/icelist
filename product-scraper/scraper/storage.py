@@ -60,16 +60,27 @@ class Storage:
 
     # ---------- 图片 ----------
     def download_images_for(self, products: Iterable[Product]) -> None:
-        for p in tqdm(list(products), desc="下载图片"):
-            sub = self.images_dir / p.platform / safe_filename(
-                p.bucket_type or "未分类"
-            ) / safe_filename(p.product_id)
-            local = []
-            for idx, url in enumerate(p.images):
-                path = download_image(url, sub, prefix=f"{idx:02d}")
-                if path:
-                    local.append(path)
-            p.local_images = local
+        products = list(products)
+        ok_count = 0
+        for p in tqdm(products, desc="下载图片"):
+            try:
+                sub = self.images_dir / safe_filename(p.platform) / safe_filename(
+                    p.bucket_type or "未分类"
+                ) / safe_filename(p.product_id)
+                local = []
+                for idx, url in enumerate(p.images or []):
+                    try:
+                        path = download_image(url, sub, prefix=f"{idx:02d}")
+                        if path:
+                            local.append(path)
+                    except Exception as exc:
+                        logger.warning(f"下载图片异常 {url}: {exc}")
+                p.local_images = local
+                if local:
+                    ok_count += 1
+            except Exception as exc:
+                logger.warning(f"处理 {p.product_id} 图片异常：{exc}")
+        logger.info(f"图片下载完成：{ok_count}/{len(products)} 件商品至少存到 1 张图")
 
     # ---------- 导出 ----------
     def save(self, products: list[Product]) -> dict[str, str]:
@@ -82,18 +93,34 @@ class Storage:
 
         if self.write_json:
             jpath = self.dir / f"products_{ts}.json"
-            jpath.write_text(
-                json.dumps([p.to_dict() for p in products], ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            results["json"] = str(jpath)
-            logger.info(f"已写入 JSON: {jpath}")
+            try:
+                jpath.write_text(
+                    json.dumps([p.to_dict() for p in products], ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                results["json"] = str(jpath)
+                logger.info(f"已写入 JSON: {jpath}")
+            except Exception as exc:
+                logger.error(f"写 JSON 失败 {jpath}: {exc}")
 
         if self.write_excel:
             xpath = self.dir / f"products_{ts}.xlsx"
-            self._write_excel(xpath, products)
-            results["excel"] = str(xpath)
-            logger.info(f"已写入 Excel: {xpath}")
+            try:
+                self._write_excel(xpath, products)
+                results["excel"] = str(xpath)
+                logger.info(f"已写入 Excel: {xpath}")
+            except PermissionError:
+                # 通常是同名 xlsx 已在 Excel 里打开，文件被锁
+                alt = self.dir / f"products_{ts}_新.xlsx"
+                logger.warning(f"Excel 文件被占用，改写到 {alt.name}")
+                try:
+                    self._write_excel(alt, products)
+                    results["excel"] = str(alt)
+                    logger.info(f"已写入 Excel: {alt}")
+                except Exception as exc:
+                    logger.error(f"写 Excel 失败 {alt}: {exc}")
+            except Exception as exc:
+                logger.error(f"写 Excel 失败 {xpath}: {exc}")
 
         return results
 

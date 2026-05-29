@@ -593,6 +593,13 @@ class MainWindow(QMainWindow):
 
     # =================== 导出 ===================
     def _on_export(self) -> None:
+        try:
+            self._do_export()
+        except Exception as exc:
+            self._log("ERROR", f"导出失败：{exc}")
+            QMessageBox.critical(self, "导出失败", f"{type(exc).__name__}: {exc}")
+
+    def _do_export(self) -> None:
         if not self.products:
             QMessageBox.information(self, "提示", "还没有抓到商品。")
             return
@@ -627,23 +634,32 @@ class MainWindow(QMainWindow):
                     "images_dir": str(Path(out_dir) / "images")}
         storage = Storage(out_cfg)
 
-        try:
-            if self.cb_dl_img.isChecked():
-                self._log("INFO", f"开始下载选中商品图片到 {out_dir}/images ...")
+        if self.cb_dl_img.isChecked():
+            self._log("INFO", f"开始下载选中商品图片到 {out_dir}/images ...")
+            try:
                 storage.download_images_for(chosen)
-            paths = storage.save(chosen)
-            msg = "\n".join(f"{k.upper()}: {v}" for k, v in paths.items())
-            self._log("INFO", f"导出完成：\n{msg}")
-            ret = QMessageBox.information(
-                self, "导出完成",
-                f"已导出 {len(chosen)} 件商品（按类别 + 价格区间分 Sheet）\n\n{msg}\n\n是否打开输出目录？",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if ret == QMessageBox.Yes:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
-        except Exception as exc:  # noqa: BLE001
-            self._log("ERROR", f"导出失败：{exc}")
-            QMessageBox.critical(self, "导出失败", str(exc))
+            except Exception as exc:
+                self._log("WARN", f"图片下载部分失败：{exc}（继续导出）")
+
+        paths = storage.save(chosen)
+        if not paths:
+            self._log("ERROR", "导出失败：没有写出任何文件，请查看日志。")
+            QMessageBox.critical(self, "导出失败",
+                "没有写出任何文件。可能原因：\n"
+                "1) 同名 Excel 文件正在 Excel 中打开\n"
+                "2) 输出目录没有写权限\n"
+                "请关闭 Excel 或换一个目录再试。")
+            return
+
+        msg = "\n".join(f"{k.upper()}: {v}" for k, v in paths.items())
+        self._log("INFO", f"导出完成：\n{msg}")
+        ret = QMessageBox.information(
+            self, "导出完成",
+            f"已导出 {len(chosen)} 件商品（按类别 + 价格区间分 Sheet）\n\n{msg}\n\n是否打开输出目录？",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ret == QMessageBox.Yes:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
 
     def _open_output_dir(self) -> None:
         d = Path(self.cfg["output"].get("dir", "output")).resolve()
