@@ -5,6 +5,14 @@
 """
 import sys
 
+# Windows cp1252 终端 → UTF-8
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from .cli import app
 from .play import main as play_main
 

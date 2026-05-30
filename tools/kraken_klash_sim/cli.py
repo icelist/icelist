@@ -13,7 +13,9 @@
     # 全部策略横向对比
     python -m tools.kraken_klash_sim compare --bet single_tile
 """
-from __future__ import annotations
+# 注意：本模块**不要**用 `from __future__ import annotations`，
+# 否则 typer 在 Python 3.11 上会把所有类型注解当字符串，
+# 解析不出 typer.Option 类型，导致 `Got unexpected extra arguments`。
 
 import sys
 from pathlib import Path

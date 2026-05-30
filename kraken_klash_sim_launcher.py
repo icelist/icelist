@@ -7,6 +7,15 @@ PyInstaller 入口
 """
 import sys
 
+# Windows 控制台默认 cp1252，会让中文报 UnicodeEncodeError。
+# Python 3.7+ 支持 reconfigure，先把 stdout/stderr 切到 UTF-8。
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from tools.kraken_klash_sim.cli import app
 from tools.kraken_klash_sim.play import main as play_main
 
