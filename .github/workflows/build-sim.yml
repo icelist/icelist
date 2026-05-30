@@ -3,18 +3,9 @@ name: Build Kraken Klash Sim (offline)
 on:
   push:
     branches: [main, master]
-    paths:
-      - 'tools/kraken_klash_sim/**'
-      - 'kraken-klash-sim.spec'
-      - 'build-sim.*'
-      - '.github/workflows/build-sim.yml'
     tags: ['sim-v*']
   pull_request:
     branches: [main, master]
-    paths:
-      - 'tools/kraken_klash_sim/**'
-      - 'kraken-klash-sim.spec'
-      - 'build-sim.*'
   workflow_dispatch: {}  # 手动触发
 
 jobs:
