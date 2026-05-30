@@ -1,0 +1,131 @@
+name: Build Kraken Klash Sim (offline)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'tools/kraken_klash_sim/**'
+      - 'kraken-klash-sim.spec'
+      - 'build-sim.*'
+      - '.github/workflows/build-sim.yml'
+    tags: ['sim-v*']
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'tools/kraken_klash_sim/**'
+      - 'kraken-klash-sim.spec'
+      - 'build-sim.*'
+  workflow_dispatch: {}  # 手动触发
+
+jobs:
+  # ----------------------------------------------------------
+  # Windows: 主交付目标
+  # ----------------------------------------------------------
+  build-windows:
+    name: Windows .exe
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install typer==0.12.5 rich==13.9.4 questionary==2.0.1 pyyaml==6.0.2
+          pip install pyinstaller==6.11.1
+
+      - name: Smoke test
+        run: |
+          python -m tools.kraken_klash_sim ev
+          python -m tools.kraken_klash_sim sim --bet half_board --strategy flat --units 5 --no-hist
+
+      - name: Build exe
+        run: pyinstaller kraken-klash-sim.spec --clean --noconfirm --distpath dist-sim --workpath build-sim
+
+      - name: Verify
+        shell: bash
+        run: |
+          if [ ! -f "dist-sim/KrakenKlashSim.exe" ]; then
+            echo "KrakenKlashSim.exe not found"
+            ls -la dist-sim/ || true
+            exit 1
+          fi
+          ls -lh dist-sim/KrakenKlashSim.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KrakenKlashSim-Windows-${{ github.sha }}
+          path: dist-sim/KrakenKlashSim.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach to Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/sim-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-sim/KrakenKlashSim.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ----------------------------------------------------------
+  # Linux & macOS: 顺手出，给会用的人
+  # ----------------------------------------------------------
+  build-unix:
+    name: ${{ matrix.os }} binary
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install typer==0.12.5 rich==13.9.4 questionary==2.0.1 pyyaml==6.0.2
+          pip install pyinstaller==6.11.1
+
+      - name: Smoke test
+        run: |
+          python -m tools.kraken_klash_sim ev
+          python -m tools.kraken_klash_sim sim --bet half_board --strategy flat --units 5 --no-hist
+
+      - name: Build
+        run: pyinstaller kraken-klash-sim.spec --clean --noconfirm --distpath dist-sim --workpath build-sim
+
+      - name: Tarball
+        run: |
+          cd dist-sim
+          tar -czf KrakenKlashSim-${{ runner.os }}.tar.gz KrakenKlashSim
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KrakenKlashSim-${{ runner.os }}-${{ github.sha }}
+          path: dist-sim/KrakenKlashSim-${{ runner.os }}.tar.gz
+          retention-days: 30
+
+      - name: Attach to Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/sim-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-sim/KrakenKlashSim-${{ runner.os }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

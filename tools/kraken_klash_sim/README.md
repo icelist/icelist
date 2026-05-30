@@ -148,3 +148,49 @@ python -m tools.kraken_klash_sim compare --bet single_tile
 
 **Q: 为什么模拟出来 Martingale 平均余额还行？**
 平均值会被「未爆仓的会话」拉高。看 **`P5 分位`** 和 **`破产率`** —— 这俩才是 Martingale 真面目。
+
+
+
+---
+
+## 单机 exe 版本（纯娱乐）
+
+如果只想"过瘾玩一下"，不写脚本，直接下个 exe 双击运行：
+
+### 拿现成的（推荐）
+1. 去 GitHub Actions 页面 → `Build Kraken Klash Sim (offline)` workflow
+2. 下载最新 artifact `KrakenKlashSim-Windows-<sha>`
+3. 解压双击 `KrakenKlashSim.exe` 就进交互模式了
+
+### 自己 build
+```bash
+# Windows
+build-sim.bat
+
+# macOS / Linux
+./build-sim.sh
+
+# 产物在 dist-sim/
+```
+
+### 交互模式 4 个动作
+- 选押法 → 输入下注单位 → 看结果（带动画）
+- `📊 查看本场统计` —— 实时面板
+- `⚡ 快进自动跑 N 局` —— 一次跑 100/1000 局看长期分布
+- `📜 查看历史会话` —— 之前所有局都存在 `~/.kraken_klash_sim/sessions.jsonl`
+- `💾 保存退出` —— 写入会话总结
+
+### CLI 模式（带参数运行）
+```bash
+KrakenKlashSim ev                                    # EV 分析
+KrakenKlashSim sim --bet half_board --strategy flat  # 蒙特卡洛
+KrakenKlashSim compare --bet single_tile             # 策略对比
+KrakenKlashSim play --bankroll 5000                  # 自定义本金交互
+```
+
+### exe 是怎么"单机"的
+- 只用 `typer + rich + questionary + pyyaml`，零网络代码
+- **没有** HTTP 客户端，**没有** Web3 库，**没有** 钱包模块
+- 想自己确认？反编译看 strings：找不到任何 thebeacon.gg 的字符串
+- 数据只写本地 `~/.kraken_klash_sim/sessions.jsonl`
+- 体积 ~15MB（vs 主仓 ChainSniper 的 ~100MB），就是因为剥离了所有联网组件

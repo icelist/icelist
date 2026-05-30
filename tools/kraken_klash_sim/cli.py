@@ -26,6 +26,7 @@ from .engine import BetSpec
 from .strategies import build_strategy
 from .ev import analyze, format_report
 from .simulate import monte_carlo, format_stats, histogram
+from .play import play_loop, DEFAULT_CONFIG as PLAY_DEFAULT_CONFIG
 
 
 app = typer.Typer(add_completion=False, help="Kraken Klash 离线模拟器（不连真服）")
@@ -186,6 +187,17 @@ def cmd_compare(
             f"{s.mean_effective_value:>11.0f}"
         )
     typer.echo("\n说明: '有效价值' = 平均余额 + 累计下注 × 空投单位返还。这才是你真正的收益指标。")
+
+
+@app.command("play")
+def cmd_play(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    bankroll: Optional[float] = typer.Option(None, "--bankroll", "-B",
+                                             help="覆盖配置里的起始余额"),
+    seed: Optional[int] = typer.Option(None, "--seed", help="复现实验用"),
+):
+    """[B] 交互式单机模式 —— 自己押注，看结果，纯娱乐"""
+    play_loop(config_path=config, starting_bankroll=bankroll, seed=seed)
 
 
 if __name__ == "__main__":
