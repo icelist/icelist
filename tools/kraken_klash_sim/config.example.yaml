@@ -1,0 +1,70 @@
+# ============================================================
+# Kraken Klash 下注结构配置（示例）
+# ============================================================
+#
+# ⚠️ 这里的数字是「占位假设」，因为 The Beacon 官方没公开完整赔率表。
+# 你进游戏后看到的真实赔率，把下面的值改成实际数字即可。
+#
+# 通用约定：
+#   - cost:     下一注消耗的 Gobloonz（整数）
+#   - win_prob: 命中概率（0~1）
+#   - payout:   命中时返回的 Gobloonz 总数（含本金）
+#               例：cost=1, payout=2 表示 "赢回 2 个，净赚 1 个"
+#                   cost=1, payout=6 表示 "赢回 6 个，净赚 5 个"
+#
+#   单注期望值 EV = win_prob * payout - cost
+#   单位下注期望收益率 = EV / cost
+#   庄家优势 house_edge = -EV / cost
+# ============================================================
+
+# 假设 Kraken Klash 是一个 6 格随机轮盘 / 类色子
+# 你在游戏里实际看到几个格子、能押几种花式，就改这里
+bets:
+  - name: single_tile          # 押 1 个格子
+    cost: 1
+    win_prob: 0.1667           # 1/6
+    payout: 5.5                # 5.5x（庄家抽 8.3%）
+    desc: "单格直押，高赔率高方差"
+
+  - name: pair                 # 押 2 个相邻格子
+    cost: 1
+    win_prob: 0.3333           # 2/6
+    payout: 2.75
+    desc: "二格押，中等赔率"
+
+  - name: half_board           # 押半边盘（3 格）
+    cost: 1
+    win_prob: 0.5
+    payout: 1.83               # 接近 2x，庄家抽 8.5%
+    desc: "押半盘，最低方差"
+
+# ============================================================
+# 模拟参数
+# ============================================================
+simulation:
+  start_bankroll: 1000         # 起始 Gobloonz
+  max_rounds: 500              # 单次会话最多打多少局
+  num_sessions: 10000          # 蒙特卡洛跑多少轮（越大越稳，1w 够用）
+  target_bankroll: null        # 达到此余额提前结束；null = 不设
+  random_seed: null            # 复现实验用，null = 真随机
+
+# ============================================================
+# 空投价值估算（关键的"为什么花 Gobloonz 还可能划算"）
+# ============================================================
+#
+# Kraken Favor 决定排行榜分配空投。每花 1 Gobloon 涨 1 Favor。
+# 你需要根据当前赛季奖池总量、活跃玩家数、你预估的排名估一个：
+#
+#   bcn_per_gobloon_spent ≈ 你能拿到的 BCN 总量 / 你愿意花的 Gobloonz 总量
+#
+# 这个值是「保底 EV 加成」，因为不论输赢都会增加。
+# 当 (bet_EV + bcn_per_gobloon_spent_in_gobloon_value) > 0 时，下注才有正期望。
+#
+# 把 BCN 单价换算成 Gobloon 单价填这里：
+airdrop:
+  enabled: true
+  # 每花掉 1 Gobloon，预期能从空投里多拿到的 BCN 数量
+  bcn_per_gobloon_spent: 0.05
+  # 1 BCN 折合多少 Gobloon（用于把空投收益折算成同一货币单位做比较）
+  # 比如：1 BCN = 0.5 USD, 1 Gobloon ≈ 0.1 USD ⇒ 1 BCN = 5 Gobloon
+  gobloon_per_bcn: 5.0
