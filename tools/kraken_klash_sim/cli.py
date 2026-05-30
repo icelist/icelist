@@ -96,7 +96,7 @@ def cmd_sim(
     fraction: float = typer.Option(0.02, "--fraction", help="fixed_fraction 比例"),
     factor: float = typer.Option(0.5, "--factor", help="kelly 半凯利因子"),
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
-    show_hist: bool = typer.Option(True, "--hist/--no-hist"),
+    no_hist: bool = typer.Option(False, "--no-hist", help="不打印 ASCII 直方图"),
 ):
     """[B] 跑蒙特卡洛模拟"""
     cfg = _load(config)
@@ -131,7 +131,7 @@ def cmd_sim(
         airdrop_bonus_per_gobloon=air_bonus,
     )
     typer.echo(format_stats(stats, sim_cfg.get("start_bankroll", 1000)))
-    if show_hist:
+    if not no_hist:
         typer.echo(histogram(stats.raw_finals))
 
 
