@@ -21,7 +21,7 @@ call .venv-sim\Scripts\activate.bat
 
 echo [3/4] 安装最小依赖（不装主仓库的重型依赖）...
 pip install --upgrade pip -q
-pip install typer==0.12.5 rich==13.9.4 questionary==2.0.1 pyyaml==6.0.2 -q
+pip install typer==0.12.5 click==8.1.8 rich==13.9.4 questionary==2.0.1 pyyaml==6.0.2 -q
 pip install pyinstaller==6.11.1 -q
 
 echo [4/4] 打包 KrakenKlashSim.exe...
