@@ -30,3 +30,8 @@ logs/
 .vscode/
 .idea/
 *.swp
+
+# Kraken Klash sim build artifacts
+dist-sim/
+build-sim/
+.venv-sim/
